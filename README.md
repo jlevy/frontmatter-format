@@ -3,39 +3,37 @@
 ## Motivation
 
 Simple, readable metadata attached to files can be useful in numerous situations, such as
-recording title, author file.
-Unfortunately, it's often unclear how to store such metadata consistently across different
-file types without breaking interoperability with existing tools.
+recording title, author, source, copyright, or the provenance of a file.
 
-**Frontmatter format** is simply a set of conventions to read and write metadata on many
-kinds of files in a syntax that is broadly compatible with programming languages, browsers,
-editors, Markdown parsers, and other tools.
+Unfortunately, it's often unclear how to format such metadata consistently across different
+file types while also not breaking interoperability with existing tools.
 
-Frontmatter format puts frontmatter metadata as YAML in frontmatter or a comment block at
-the top of the file.
-This approach works with Markdown, HTML, CSS, Python, C/C++, Rust, SQL, and most other
-common text formats.
+**Frontmatter format** is a way to add metadata as frontmatter on any file.
+It is a simple set of conventions to put structured metadata as YAML at the top of a file in
+a syntax that is broadly compatible with programming languages, browsers, editors, and other
+tools.
 
-This is a description of the format and a simple reference implementation.
-
-This implementation is in Python but the format is very simple and easy to implement in any
-language.
-
-The purpose of this repo is to explain the idea of the format so anyone can use it, and
-encourage the adoption of the format, especially for workflows around text documents that are
-becoming common in AI pipelines.
-
-## Examples
+Frontmatter format specifies a syntax for the metadata as a comment block at the top of a
+file.
+This approach works while ensuring the file remains valid Markdown, HTML, CSS, Python,
+C/C++, Rust, SQL, or most other text formats.
 
 Frontmatter format is a generalization of the common format for frontmatter used by Jekyll
 and other CMSs for Markdown files.
-In that format, frontmatter is enclosed in `---` delimiters.
+In that format, frontmatter is enclosed in lines containing `---` delimiters.
 
-Frontmatter format is a way to add metadata as frontmatter on any file.
-In this generalized format, we allow multiple styles of frontmatter demarcation, allowing
-for easy auto-detection, parsing, and compatibility.
+In this generalized format, we allow several styles of frontmatter demarcation, with the
+first line of the file indicating the format and style.
 
-Below are a few examples to illustrate:
+This is a description of the format and a simple reference implementation.
+The implementation is in Python but the format is very simple and easy to implement in any
+language.
+
+The purpose of this repository is to explain the idea of the format so anyone can use it,
+and encourage the adoption of the format, especially for workflows around text documents that
+are becoming increasingly common in AI tools and pipelines.
+
+## Examples
 
 ```markdown
 ---
@@ -45,6 +43,7 @@ created_at: 2022-08-07 00:00:00
 tags:
   - yaml
   - examples
+# This is a YAML comment, so ignored.
 ---
 Hello, *World*!
 ```
@@ -86,14 +85,17 @@ SELECT * FROM world;
   any given file, it generally doesn't break existing tools.
   Almost every language has a style for which frontmatter works as a comment.
 
-- **Auto-detecting parses:** here is a relatively unique prefix that indicates that metadata
-  is present.
-  That means it's possible to auto-detect metadata as well as the style of the metadata, so
-  the delimiters and prefixes are parsed correctly.
+- **Auto-detectable format:** Frontmatter and its format can be recognized by the first few
+  bytes of the file.
+  That means it's possible to detect metadata and parse it automatically.
 
-- **Metadata is optional:** A file without metadata can be read with the same tools.
-  So it's easy to roll out metadata into files gracefully, without breaking any existing
-  tooling.
+- **Metadata is optional:** Files with or without metadata can be read with the same tools.
+  So it's easy to roll out metadata into files gracefully, as needed file by file.
+
+- **YAML syntax:** JSON, YAML, XML, and TOML are all used for metadata in some situatiohns.
+  YAML is the best choice here because it is already in widespread use with Markdown, is a
+  superset of JSON (in case an application wishes to use pure JSON), and is easy to read and
+  edit manually.
 
 ## Format Definition
 
@@ -131,7 +133,7 @@ The supported frontmatter styles are:
    Useful for Rust or C++ or similar code content.
 
 5. *C style*: delimiters `/*---` and `---*/` with no prefix on each line.
-   Useful for CSS or C or similar code content.
+   Useful for JavaScript, TypeScript, CSS or C or similar code content.
 
 6. *Dash style*: delimiters `----` and `----` with `-- ` prefix on each line.
    Useful for SQL or similar code content.
@@ -141,17 +143,21 @@ The delimiters must be alone on their own lines, terminated with a newline.
 Any style is acceptable on any file as it can be automatically detected.
 When writing, you can specify the style.
 
-For all frontmatter styles, the content between the delimiters can be any text in UTF-8
-encoding.
-But it is recommended to use YAML.
+For all frontmatter styles, the content between the delimiters is YAML text in UTF-8
+encoding, with an optional prefix on each line that depends on the style.
 
 For some of the formats, each frontmatter line is prefixed with a prefix to make sure the
 entire file remains valid in a given syntax (Python, Rust, SQL, etc.). This prefix is
 stripped during parsing.
 
-It is recommended to use a prefix with a trailing space (such as `# `) but a bare prefix
-without the trailing space is also allowed.
+It is recommended to use a prefix with a trailing space (such as `# ` or `// `) but a bare
+prefix without the trailing space (`#` or `##`) is also allowed.
+
 Other whitespace is preserved (before parsing with YAML).
+
+Note that YAML comments, which are lines beginning with `#` in the metadata, are allowed.
+For example, for hash style, this means there must be two hashes (`# #` or `##`) at the
+start of a comment line.
 
 There is no restriction on the content of the file after the frontmatter.
 It may even contain other content in frontmatter format, but this will not be parsed as

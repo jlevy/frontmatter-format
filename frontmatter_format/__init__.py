@@ -11,6 +11,7 @@ from .frontmatter_format import (
 )
 from .key_sort import custom_key_sort
 from .yaml_util import (
+    add_default_yaml_representer,
     dump_yaml,
     from_yaml_string,
     new_yaml,
@@ -29,11 +30,12 @@ __all__ = [
     "fmf_strip_frontmatter",
     "fmf_insert_frontmatter",
     "Metadata",
-    "new_yaml",
-    "to_yaml_string",
-    "from_yaml_string",
+    "add_default_yaml_representer",
     "dump_yaml",
+    "from_yaml_string",
+    "new_yaml",
     "read_yaml_file",
+    "to_yaml_string",
     "write_yaml_file",
     "custom_key_sort",
 ]

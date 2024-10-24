@@ -4,15 +4,26 @@ YAML file storage. Wraps ruamel.yaml with a few extra features.
 
 import os
 from io import StringIO
-from typing import Any, Callable, Optional, TextIO
+from typing import Any, Callable, Dict, Optional, TextIO, Type
 
-from ruamel.yaml import YAML
+from ruamel.yaml import Representer, YAML
 
 KeySort = Callable[[str], Any]
 
 
 def none_or_empty_dict(val: Any) -> bool:
     return val is None or val == {}
+
+
+_default_representers: Dict[Type[Any], Callable[[Representer, Any], Any]] = {}
+
+
+def add_default_yaml_representer(type: Type[Any], represent: Callable[[Representer, Any], Any]):
+    """
+    Add a default representer for a type.
+    """
+    global _default_representers
+    _default_representers[type] = represent
 
 
 def new_yaml(
@@ -50,6 +61,10 @@ def new_yaml(
 
     yaml.representer.add_representer(str, represent_str)
 
+    # Add other default representers.
+    for type, representer in _default_representers.items():
+        yaml.representer.add_representer(type, representer)
+
     if stringify_unknown:
 
         def represent_unknown(dumper, data):
@@ -70,6 +85,14 @@ def from_yaml_string(yaml_string: str) -> Any:
     return new_yaml().load(yaml_string)
 
 
+def read_yaml_file(filename: str) -> Any:
+    """
+    Read YAML file into a Python object.
+    """
+    with open(filename, "r") as f:
+        return new_yaml().load(f)
+
+
 def to_yaml_string(
     value: Any, key_sort: Optional[KeySort] = None, stringify_unknown: bool = False
 ) -> str:
@@ -88,14 +111,6 @@ def dump_yaml(
     Write a Python object to a YAML stream.
     """
     new_yaml(key_sort=key_sort, stringify_unknown=stringify_unknown, typ="rt").dump(value, stream)
-
-
-def read_yaml_file(filename: str) -> Any:
-    """
-    Read an entire YAML file into a Python object.
-    """
-    with open(filename, "r", encoding="utf-8") as f:
-        return new_yaml().load(f)
 
 
 def write_yaml_file(
