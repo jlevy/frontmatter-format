@@ -1,5 +1,6 @@
 import os
 
+from frontmatter_format.key_sort import custom_key_sort
 from frontmatter_format.yaml_util import read_yaml_file, write_yaml_file
 
 
@@ -8,14 +9,8 @@ def test_write_yaml_file_with_custom_key_sort():
 
     file_path = "tmp/test_write_yaml_file.yaml"
     data = {"title": "Test Title", "author": "Test Author", "date": "2022-01-01"}
-
     priority_keys = ["date", "title"]
-
-    def priority_sort(key: str):
-        return (priority_keys.index(key) if key in priority_keys else float("inf"), key)
-
-    write_yaml_file(data, file_path, key_sort=priority_sort)
-
+    write_yaml_file(data, file_path, key_sort=custom_key_sort(priority_keys))
     read_data = read_yaml_file(file_path)
 
     # Priority keys should be first.

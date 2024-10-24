@@ -9,6 +9,7 @@ from frontmatter_format.frontmatter_format import (
     fmf_write,
     FmStyle,
 )
+from frontmatter_format.key_sort import custom_key_sort
 from frontmatter_format.yaml_util import dump_yaml
 
 
@@ -97,15 +98,10 @@ def test_fmf_with_custom_key_sort():
     os.makedirs("tmp", exist_ok=True)
 
     # Test with Markdown.
-    priority_keys = ["date", "title"]
-
-    def priority_sort(key: str):
-        return (priority_keys.index(key) if key in priority_keys else float("inf"), key)
-
     file_path_md = "tmp/test_write_custom_sort.md"
     content_md = "Hello, World!"
     metadata_md = {"title": "Test Title", "author": "Test Author", "date": "2022-01-01"}
-    fmf_write(file_path_md, content_md, metadata_md, key_sort=priority_sort)
+    fmf_write(file_path_md, content_md, metadata_md, key_sort=custom_key_sort(["date", "title"]))
     with open(file_path_md, "r") as f:
         lines = f.readlines()
     assert lines[0] == FmStyle.yaml.start + "\n"

@@ -9,6 +9,7 @@ from .frontmatter_format import (
     FmStyle,
     Metadata,
 )
+from .key_sort import custom_key_sort
 from .yaml_util import (
     dump_yaml,
     from_yaml_string,
@@ -34,4 +35,5 @@ __all__ = [
     "dump_yaml",
     "read_yaml_file",
     "write_yaml_file",
+    "custom_key_sort",
 ]
