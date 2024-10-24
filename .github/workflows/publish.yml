@@ -3,11 +3,14 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  workflow_dispatch: # Enable manual trigger.
 
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-
+    permissions:
+      id-token: write # Mandatory for OIDC.
+      contents: read
     steps:
       - name: Check out the code
         uses: actions/checkout@v4
@@ -29,4 +32,4 @@ jobs:
         run: poetry build
 
       - name: Publish to PyPI
-        run: poetry publish
+        uses: pypa/gh-action-pypi-publish@release/v1
