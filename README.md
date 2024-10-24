@@ -35,6 +35,8 @@ are becoming increasingly common in AI tools and pipelines.
 
 ## Examples
 
+Some simple examples:
+
 ```markdown
 ---
 title: Sample Markdown File
@@ -78,6 +80,12 @@ filename: styles.css
 ----
 SELECT * FROM world;
 ```
+
+Here's an example of a richer metadata in use, from a tool that does video transcription.
+You can see how it's useful having a simple and clear format for title, description,
+history, source of the content, etc.
+
+![Credit for video to @KBoges on YouTube](images/example.png)
 
 ## Advantages of this Approach
 
