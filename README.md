@@ -80,6 +80,21 @@ filename: styles.css
 SELECT * FROM world;
 ```
 
+## Advantages of this Approach
+
+- **Compatible with existing syntax:** By choosing a style for the metadata consistent with
+  any given file, it generally doesn't break existing tools.
+  Almost every language has a style for which frontmatter works as a comment.
+
+- **Auto-detecting parses:** here is a relatively unique prefix that indicates that metadata
+  is present.
+  That means it's possible to auto-detect metadata as well as the style of the metadata, so
+  the delimiters and prefixes are parsed correctly.
+
+- **Metadata is optional:** A file without metadata can be read with the same tools.
+  So it's easy to roll out metadata into files gracefully, without breaking any existing
+  tooling.
+
 ## Format Definition
 
 A file is in frontmatter format if the first characters are one of the following:
@@ -211,17 +226,32 @@ print(offset)  # Outputs the byte offset where the content starts
 
 ## FAQ
 
-- **Isn't this the same as what some CMSs use, Markdown files and YAML at the top?** Yes!
-  But this generalizes that format, and removes the direct tie-in to Markdown or any CMS.
-  This can work with any tool.
-  For HTML and code, it works basically with no changes at all since the frontmatter is
-  considered a comment.
+- **Is this mature?** This is the first draft of this format.
+  But I've been using this on my own projects for a couple months.
+  The flexibity of just having metadata on all your text files is great for workflows,
+  pipelines, etc.
+
+- **When should we use it?** All the time if you can!
+  It's especially important for command-line tools, AI agents, LLM workflows, since you
+  often want to store extra metadata is a consistent way on text inputs of various formats
+  like Markdown, HTML, CSS, and Python.
 
 - **Does this specify the format of the YAML itself?** No.
   This is simply a format for attaching metadata.
   What metadata you attach is up to your use case.
   Standardizing headings like title, author, description, let alone other more
   application-specific information is beyond the scope of this frontmatter format.
+
+- **Can this work with Pydantic?** Yes, definitely.
+  In fact, I think it's probably a good practice to define self-identifiable Pydantic (or
+  Zod) schemas for all your metadata, and then just serialize and deserialize them to
+  frontmatter everywhere.
+
+- **Isn't this the same as what some CMSs use, Markdown files and YAML at the top?** Yes!
+  But this generalizes that format, and removes the direct tie-in to Markdown or any CMS.
+  This can work with any tool.
+  For HTML and code, it works basically with no changes at all since the frontmatter is
+  considered a comment.
 
 - **Can this work with binary files?** No reason why not, if it makes sense for you!
   You can use `fmf_insert_frontmatter()` to add metadata of any style to any file.
