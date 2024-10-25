@@ -281,9 +281,14 @@ print(raw_metadata)  # 'title: Test Title\nauthor: Test Author\n'
 
 ## FAQ
 
+- **Hasn't this been done before?** Possibly, but as far as I can tell, not in a systematic
+  way for multiple file formats.
+  I needed this myself, and think we'd all be better off if more tools used YAML metadata
+  consistently, so I've released the format and implementation here.
+
 - **Is this mature?** This is the first draft of this format.
   But I've been using this on my own projects for a couple months.
-  The flexibity of just having metadata on all your text files is great for workflows,
+  The flexibity of just having metadata on all your text files has been great for workflows,
   pipelines, etc.
 
 - **When should we use it?** All the time if you can!

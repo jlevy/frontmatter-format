@@ -2,7 +2,7 @@
 name = "frontmatter-format"
 # Keep this a dev version, as the dynamic versioning plugin is used for actual release versions:
 version = "0.0.0.dev"
-description = "A format for YAML frontmatter on any file."
+description = "A micro-format for YAML metadata on any file."
 authors = ["Joshua Levy <joshua@cal.berkeley.edu>"]
 readme = "README.md"
 license = "MIT"
