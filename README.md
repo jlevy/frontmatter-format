@@ -128,7 +128,7 @@ The prefix determines the *style* of the frontmatter.
 The style specifies the matching terminating delimiter for the end of the frontmatter as
 well as an optional prefix (which is typically a comment character in some language).
 
-The supported frontmatter styles are:
+The allowed frontmatter styles are:
 
 1. *YAML style*: delimiters `---` and `---` with no prefix on each line.
    Useful for **text** or **Markdown** content.
@@ -207,7 +207,7 @@ from frontmatter_format import fmf_read, fmf_read_raw, fmf_write, FmStyle, custo
 # Write some content:
 content = "Hello, World!\n"
 metadata = {"author": "Test Author", "title": "Test Title"}
-fmf_write("example.md", content, metadata, style=FmStyle.yaml)
+fmf_write("example.md", content, metadata, style=FmStyle.md)
 
 # Read it back. Style is auto-detected:
 content, metadata = fmf_read("example.md")

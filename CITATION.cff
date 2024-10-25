@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: "Frontmatter Format: A format for YAML metadata on any file"
+title: "Frontmatter Format: A micro-format for YAML metadata on any file"
 message: >-
   If you use this software, please cite it using the metadata from this file.
 type: software
@@ -7,7 +7,7 @@ authors:
   - family-names: Levy
     given-names: Joshua
 repository-code: "https://github.com/jlevy/frontmatter-format"
-date-released: 2024-10-21
+date-released: 2024-10-25
 abstract: >-
   Frontmatter format is a way to add metadata as frontmatter on any file.
   It is a simple set of conventions to put structured metadata as YAML

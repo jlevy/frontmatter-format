@@ -31,14 +31,17 @@ class FmDelimiters:
 class FmStyle(Enum):
     """
     The style of frontmatter demarcation to use.
+
+    There are several styles, and synonyms for each style to make it easy to
+    remember which to use for each format.
     """
 
-    yaml = FmDelimiters("---", "---", "", [])
-    html = FmDelimiters("<!---", "--->", "", [])
-    hash = FmDelimiters("#---", "#---", "# ", ["# ", "#"])
-    slash = FmDelimiters("//---", "//---", "// ", ["// ", "//"])
-    slash_star = FmDelimiters("/*---", "---*/", "", [])
-    dash = FmDelimiters("----", "----", "-- ", ["-- ", "--"])
+    yaml = md = FmDelimiters("---", "---", "", [])
+    html = xml = FmDelimiters("<!---", "--->", "", [])
+    hash = python = ruby = csv = FmDelimiters("#---", "#---", "# ", ["# ", "#"])
+    slash = rust = cpp = FmDelimiters("//---", "//---", "// ", ["// ", "//"])
+    slash_star = c = javascript = css = FmDelimiters("/*---", "---*/", "", [])
+    dash = sql = FmDelimiters("----", "----", "-- ", ["-- ", "--"])
 
     @property
     def start(self) -> str:
@@ -235,7 +238,7 @@ def fmf_insert_frontmatter(
     Insert metadata as frontmatter into the given file, inserting at the top
     and replacing any existing frontmatter.
     """
-    if metadata is None:
+    if not metadata:
         return
 
     if isinstance(metadata, str):
