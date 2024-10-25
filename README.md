@@ -6,12 +6,13 @@ Simple, readable metadata attached to files can be useful in numerous situations
 recording title, author, source, copyright, or the provenance of a file.
 
 Unfortunately, it's often unclear how to format such metadata consistently across different
-file types while also not breaking interoperability with existing tools.
+file types while preserving valid syntax, making parsing easy, and breaking interoperability
+with existing tools.
 
 **Frontmatter format** is a way to add metadata as frontmatter on any file.
-It is a simple set of conventions to put structured metadata as YAML at the top of a file in
-a syntax that is broadly compatible with programming languages, browsers, editors, and other
-tools.
+It is basically a micro-format: a simple set of conventions to put structured metadata as
+YAML at the top of a file in a syntax that is broadly compatible with programming languages,
+browsers, editors, and other tools.
 
 Frontmatter format specifies a syntax for the metadata as a comment block at the top of a
 file.
@@ -25,13 +26,13 @@ In that format, frontmatter is enclosed in lines containing `---` delimiters.
 In this generalized format, we allow several styles of frontmatter demarcation, with the
 first line of the file indicating the format and style.
 
-This is a description of the format and a simple reference implementation.
-The implementation is in Python but the format is very simple and easy to implement in any
-language.
+This repository is a **description of the format** and an easy-to-use **reference
+implementation**. The implementation is in Python but the format is very simple and easy to
+implement in any language.
 
-The purpose of this repository is to explain the idea of the format so anyone can use it,
-and encourage the adoption of the format, especially for workflows around text documents that
-are becoming increasingly common in AI tools and pipelines.
+This readme aims to explain the format so anyone can use it and encourage the adoption of
+the format, especially for workflows around text documents that are becoming increasingly
+common in AI tools and pipelines.
 
 ## Examples
 
@@ -130,23 +131,23 @@ well as an optional prefix (which is typically a comment character in some langu
 The supported frontmatter styles are:
 
 1. *YAML style*: delimiters `---` and `---` with no prefix on each line.
-   Useful for text or Markdown content.
+   Useful for **text** or **Markdown** content.
 
 2. *HTML style*: delimiters `<!---` and `--->` with no prefix on each line.
-   Useful for HTML or XML or similar content.
+   Useful for **HTML** or **XML** or similar content.
 
 3. *Hash style*: delimiters `#---` and `#---` with `# ` prefix on each line.
-   Useful for Python or similar code content.
-   Also works for CSV files with many tools.
+   Useful for **Python** or similar code content.
+   Also works for **CSV** files for some (but sadly not all) tools.
 
-4. *Rust style*: delimiters `//---` and `//---` with `// ` prefix on each line.
-   Useful for Rust or C++ or similar code content.
+4. *Slash style*: delimiters `//---` and `//---` with `// ` prefix on each line.
+   Useful for **Rust** or **C++** or similar code content.
 
-5. *C style*: delimiters `/*---` and `---*/` with no prefix on each line.
-   Useful for JavaScript, TypeScript, CSS or C or similar code content.
+5. *Slash star style*: delimiters `/*---` and `---*/` with no prefix on each line.
+   Useful for **JavaScript**, **TypeScript**, **CSS** or **C** or similar code content.
 
 6. *Dash style*: delimiters `----` and `----` with `-- ` prefix on each line.
-   Useful for SQL or similar code content.
+   Useful for **SQL** or similar code content.
 
 The delimiters must be alone on their own lines, terminated with a newline.
 
@@ -198,27 +199,63 @@ poetry add frontmatter-format
 
 ## Usage
 
+Basic use:
+
 ```python
-from frontmatter_format import fmf_read, fmf_read_raw, fmf_write, FmStyle
+from frontmatter_format import fmf_read, fmf_read_raw, fmf_write, FmStyle, custom_key_sort
 
 # Write some content:
-content = "Hello, World!"
-metadata = {"title": "Test Title", "author": "Test Author"}
+content = "Hello, World!\n"
+metadata = {"author": "Test Author", "title": "Test Title"}
 fmf_write("example.md", content, metadata, style=FmStyle.yaml)
-
-# Or any other desired style:
-html_content = "<p>Hello, World!</p>"
-fmf_write("example.html", content, metadata, style=FmStyle.html)
 
 # Read it back. Style is auto-detected:
 content, metadata = fmf_read("example.md")
 print(content)  # Hello, World!
-print(metadata)  # {'title': 'Test Title', 'author': 'Test Author'}
+print(metadata)  # {'author': 'Test Author', 'title': 'Test Title'}
+```
 
+The file then contains:
+
+```md
+---
+author: Test Author
+title: Test Title
+---
+Hello, World!
+```
+
+By default, writes are atomic.
+Key sort is preserved, but you can provide a sorting function if you prefer metadata keys to
+be in a specific order (often more readable than being alphabetical).
+There is also an option for making custom sorts, so certain keys come first and the rest are
+sorted in natural order.
+
+Examples with more formats:
+
+```python
+# Write in any other desired style:
+html_content = "<p>Hello, World!</p>"
+title_first_sort = custom_key_sort(["title", "author"])
+fmf_write("example.html", content, metadata, style=FmStyle.html, key_sort=title_first_sort)
+```
+
+The file then contains:
+
+```html
+<!---
+title: Test Title
+author: Test Author
+--->
+Hello, World!
+```
+
+YAML parsing is optional:
+
+```
 # Read metadata without parsing:
 content, raw_metadata = fmf_read_raw("example.md")
-print(content)  # Hello, World!
-print(raw_metadata)  # 'title: Test Title\nauthor: Test Author\n'
+print(repr(raw_metadata))  # 'author: Test Author\ntitle: Test Title\n'
 ```
 
 The above is easiest for small files, but you can also operate more efficiently directly on
