@@ -100,7 +100,7 @@ history, source of the content, etc.
 - **Metadata is optional:** Files with or without metadata can be read with the same tools.
   So it's easy to roll out metadata into files gracefully, as needed file by file.
 
-- **YAML syntax:** JSON, YAML, XML, and TOML are all used for metadata in some situatiohns.
+- **YAML syntax:** JSON, YAML, XML, and TOML are all used for metadata in some situations.
   YAML is the best choice here because it is already in widespread use with Markdown, is a
   superset of JSON (in case an application wishes to use pure JSON), and is easy to read and
   edit manually.
@@ -118,6 +118,8 @@ A file is in frontmatter format if the first characters are one of the following
 - `//---`
 
 - `/*---`
+
+- `-----`
 
 and if this prefix is followed by a newline (`\n`).
 
@@ -210,20 +212,20 @@ fmf_write("example.html", content, metadata, style=FmStyle.html)
 
 # Read it back. Style is auto-detected:
 content, metadata = fmf_read("example.md")
-print(content)  # Outputs: Hello, World!
-print(metadata)  # Outputs: {'title': 'Test Title', 'author': 'Test Author'}
+print(content)  # Hello, World!
+print(metadata)  # {'title': 'Test Title', 'author': 'Test Author'}
 
 # Read metadata without parsing:
 content, raw_metadata = fmf_read_raw("example.md")
-print(content)  # Outputs: Hello, World!
-print(raw_metadata)  # Outputs: 'title: Test Title\nauthor: Test Author\n'
+print(content)  # Hello, World!
+print(raw_metadata)  # 'title: Test Title\nauthor: Test Author\n'
 ```
 
 The above is easiest for small files, but you can also operate more efficiently directly on
 files, without reading the file contents into memory.
 
 ```python
-from frontmatter_format import fmf_strip_frontmatter, fmf_insert_frontmatter, fmf_read_frontmatter_raw
+from frontmatter_format import fmf_strip_frontmatter, fmf_insert_frontmatter, fmf_read_frontmatter, fmf_read_frontmatter_raw
 
 # Strip and discard the metadata from a file:
 fmf_strip_frontmatter("example.md")
@@ -233,9 +235,11 @@ new_metadata = {"title": "New Title", "author": "New Author"}
 fmf_insert_frontmatter("example.md", new_metadata, fm_style=FmStyle.yaml)
 
 # Read the raw frontmatter metadata and get the offset for the rest of the content:
+metadata, offset = fmf_read_frontmatter("example.md")
+print(metadata)  # {'title': 'Test Title', 'author': 'Test Author'}
+print(offset)  # The byte offset where the content starts
 raw_metadata, offset = fmf_read_frontmatter_raw("example.md")
-print(raw_metadata)  # Outputs: 'title: Test Title\nauthor: Test Author\n'
-print(offset)  # Outputs the byte offset where the content starts
+print(raw_metadata)  # 'title: Test Title\nauthor: Test Author\n'
 ```
 
 ## FAQ

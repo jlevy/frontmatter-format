@@ -7,7 +7,7 @@ import shutil
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, cast, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ruamel.yaml.error import YAMLError
 
@@ -113,6 +113,15 @@ def fmf_write(
         raise e
 
 
+def _parse_metadata(path: Path | str, metadata_str: Optional[str]) -> Optional[Metadata]:
+    if not metadata_str:
+        return None
+    try:
+        return from_yaml_string(metadata_str)
+    except YAMLError as e:
+        raise FmFormatError(f"Error parsing YAML metadata: `{path}`: {e}") from e
+
+
 def fmf_read(path: Path | str) -> Tuple[str, Optional[Metadata]]:
     """
     Read UTF-8 text content (typically Markdown) from a file with optional YAML metadata
@@ -121,15 +130,7 @@ def fmf_read(path: Path | str) -> Tuple[str, Optional[Metadata]]:
     Reads the entire file into memory. Parses the metadata as YAML.
     """
     content, metadata_str = fmf_read_raw(path)
-    metadata = None
-    if metadata_str:
-        try:
-            metadata = from_yaml_string(metadata_str)
-        except YAMLError as e:
-            raise FmFormatError(f"Error parsing YAML metadata: `{path}`: {e}") from e
-        if not isinstance(metadata, dict):
-            raise FmFormatError(f"Invalid metadata type: {type(metadata)}")
-        metadata = cast(Metadata, metadata)
+    metadata = _parse_metadata(path, metadata_str)
     return content, metadata
 
 
@@ -144,6 +145,15 @@ def fmf_read_raw(path: Path | str) -> Tuple[str, Optional[str]]:
         content = f.read()
 
     return content, metadata_str
+
+
+def fmf_read_frontmatter(path: Path | str) -> Optional[Metadata]:
+    """
+    Reads and parses only the metadata frontmatter from the file.
+    Returns None if there is no frontmatter.
+    """
+    metadata_str, _ = fmf_read_frontmatter_raw(path)
+    return _parse_metadata(path, metadata_str)
 
 
 def fmf_read_frontmatter_raw(path: Path | str) -> Tuple[Optional[str], int]:

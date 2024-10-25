@@ -1,6 +1,7 @@
 from .frontmatter_format import (
     fmf_insert_frontmatter,
     fmf_read,
+    fmf_read_frontmatter,
     fmf_read_frontmatter_raw,
     fmf_read_raw,
     fmf_strip_frontmatter,
@@ -26,6 +27,7 @@ __all__ = [
     "fmf_write",
     "fmf_read",
     "fmf_read_raw",
+    "fmf_read_frontmatter",
     "fmf_read_frontmatter_raw",
     "fmf_strip_frontmatter",
     "fmf_insert_frontmatter",
