@@ -4,7 +4,7 @@ YAML file storage. Wraps ruamel.yaml with a few extra features.
 
 import os
 from io import StringIO
-from typing import Any, Callable, Dict, Optional, TextIO, Type
+from typing import Any, Callable, List, Optional, TextIO, Type
 
 from ruamel.yaml import Representer, YAML
 
@@ -15,15 +15,23 @@ def none_or_empty_dict(val: Any) -> bool:
     return val is None or val == {}
 
 
-_default_representers: Dict[Type[Any], Callable[[Representer, Any], Any]] = {}
+YamlCustomizer = Callable[[YAML], None]
+
+_default_yaml_customizers: List[YamlCustomizer] = []
+
+
+def add_default_yaml_customizer(customizer: YamlCustomizer):
+    """
+    Customize the default YAML instance by adding a function to configure it.
+    """
+    _default_yaml_customizers.append(customizer)
 
 
 def add_default_yaml_representer(type: Type[Any], represent: Callable[[Representer, Any], Any]):
     """
     Add a default representer for a type.
     """
-    global _default_representers
-    _default_representers[type] = represent
+    _default_yaml_customizers.append(lambda yaml: yaml.representer.add_representer(type, represent))
 
 
 def new_yaml(
@@ -61,9 +69,9 @@ def new_yaml(
 
     yaml.representer.add_representer(str, represent_str)
 
-    # Add other default representers.
-    for type, representer in _default_representers.items():
-        yaml.representer.add_representer(type, representer)
+    # Customize the YAML instance.
+    for customizer in _default_yaml_customizers:
+        customizer(yaml)
 
     if stringify_unknown:
 
