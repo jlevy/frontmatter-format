@@ -321,3 +321,15 @@ print(raw_metadata)  # 'title: Test Title\nauthor: Test Author\n'
   Some tools do properly honor hash style comments when parsing CSV files.
   A few do not. Our recommendation is go ahead and use it, and find ways to strip the
   metadata at the last minute if you really can't get a tool to work with the metadata.
+
+- **Does this also work for YAML files?** Yes!
+  It's fine to have YAML metadata on YAML metadata.
+  There are just two nuances.
+
+  Firstly, watch out for duplicate `---` separators, if you insert frontmatter in front of a
+  file that already has it.
+
+  Secondly, it's up to you to use the YAML itself to distinguish whether a file has
+  frontmatter or is just a plain YAML file.
+  Both of these can be avoided if you use plain YAML with `---` separators only when using
+  frontmatter format.
