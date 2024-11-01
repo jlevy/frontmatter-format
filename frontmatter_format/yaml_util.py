@@ -2,8 +2,8 @@
 YAML file storage. Wraps ruamel.yaml with a few extra features.
 """
 
-import os
 from io import StringIO
+from pathlib import Path
 from typing import Any, Callable, List, Optional, TextIO, Type
 
 from ruamel.yaml import Representer, YAML
@@ -93,12 +93,12 @@ def from_yaml_string(yaml_string: str) -> Any:
     return new_yaml().load(yaml_string)
 
 
-def read_yaml_file(filename: str) -> Any:
+def read_yaml_file(path: str | Path) -> Any:
     """
     Read YAML file into a Python object.
     """
-    with open(filename, "r") as f:
-        return new_yaml().load(f)
+    path = Path(path)
+    return new_yaml().load(path.read_text(encoding="utf-8"))
 
 
 def to_yaml_string(
@@ -122,19 +122,21 @@ def dump_yaml(
 
 
 def write_yaml_file(
-    value: Any, filename: str, key_sort: Optional[KeySort] = None, stringify_unknown: bool = False
+    value: Any,
+    path: str | Path,
+    key_sort: Optional[KeySort] = None,
+    stringify_unknown: bool = False,
 ):
     """
     Write the given value to the YAML file, creating it atomically.
     """
-    temp_filename = f"{filename}.yml.tmp"  # Same directory with a temporary suffix.
+    path = Path(path)
+    temp_path = path.with_suffix(".yml.tmp")
     try:
-        with open(temp_filename, "w", encoding="utf-8") as f:
-            dump_yaml(value, f, key_sort, stringify_unknown=stringify_unknown)
-        os.replace(temp_filename, filename)
+        temp_path.write_text(
+            to_yaml_string(value, key_sort, stringify_unknown=stringify_unknown), encoding="utf-8"
+        )
+        temp_path.replace(path)
     except Exception as e:
-        try:
-            os.remove(temp_filename)
-        except FileNotFoundError:
-            pass
+        temp_path.unlink(missing_ok=True)
         raise e
