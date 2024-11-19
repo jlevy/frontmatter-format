@@ -162,46 +162,60 @@ def fmf_read_frontmatter(path: Path | str) -> Optional[Metadata]:
 def fmf_read_frontmatter_raw(path: Path | str) -> Tuple[Optional[str], int]:
     """
     Reads the metadata frontmatter from the file and returns the metadata string and
-    the seek offset of the beginning of the content. Does not parse the metadata.
-    Does not read the body content into memory.
+    the seek offset of the beginning of the content. Does not parse the metadata or
+    read the body content. Returns None, 0 if there is no frontmatter. Safe on binary
+    files.
     """
     metadata_lines: List[str] = []
     in_metadata = False
 
-    with open(path, "r", encoding="utf-8") as f:
-        first_line = f.readline().rstrip()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            first_line = f.readline().rstrip()
 
-        if first_line == FmStyle.yaml.start:
-            delimiters = FmStyle.yaml
-            in_metadata = True
-        elif first_line == FmStyle.html.start:
-            delimiters = FmStyle.html
-            in_metadata = True
-        elif first_line == FmStyle.hash.start:
-            delimiters = FmStyle.hash
-            in_metadata = True
-        else:
-            # Empty file or no recognized frontmatter.
-            return None, 0
+            if first_line == FmStyle.yaml.start:
+                delimiters = FmStyle.yaml
+                in_metadata = True
+            elif first_line == FmStyle.html.start:
+                delimiters = FmStyle.html
+                in_metadata = True
+            elif first_line == FmStyle.hash.start:
+                delimiters = FmStyle.hash
+                in_metadata = True
+            else:
+                # Empty file or no recognized frontmatter.
+                return None, 0
 
-        while True:
-            line = f.readline()
-            if not line:
-                break
+            while True:
+                line = f.readline()
+                if not line:
+                    break
 
-            if line.rstrip() == delimiters.end and in_metadata:
-                metadata_str = "".join(delimiters.strip_prefix(mline) for mline in metadata_lines)
-                return metadata_str, f.tell()
+                if line.rstrip() == delimiters.end and in_metadata:
+                    metadata_str = "".join(
+                        delimiters.strip_prefix(mline) for mline in metadata_lines
+                    )
+                    return metadata_str, f.tell()
 
-            if in_metadata:
-                metadata_lines.append(line)
+                if in_metadata:
+                    metadata_lines.append(line)
 
-        if in_metadata:  # If still true, the end delimiter was never found
-            raise FmFormatError(
-                f"Delimiter `{delimiters.end}` for end of frontmatter not found: `{(path)}`"
-            )
+            if in_metadata:  # If still true, the end delimiter was never found
+                raise FmFormatError(
+                    f"Delimiter `{delimiters.end}` for end of frontmatter not found: `{(path)}`"
+                )
+    except UnicodeDecodeError:
+        # Was a binary file.
+        pass
 
     return None, 0
+
+
+def fmf_has_frontmatter(path: Path | str) -> bool:
+    """
+    Returns True if the file has frontmatter, False otherwise. Safe on binary files.
+    """
+    return fmf_read_frontmatter_raw(path)[0] is not None
 
 
 def fmf_strip_frontmatter(path: Path | str) -> None:
