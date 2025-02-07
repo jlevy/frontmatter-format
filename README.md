@@ -190,7 +190,7 @@ For readability, there is also support for preferred sorting of YAML keys.
 
 ## Installation
 
-```
+```sh
 # Use pip
 pip install frontmatter-format
 # Or poetry
