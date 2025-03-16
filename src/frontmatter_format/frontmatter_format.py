@@ -141,10 +141,10 @@ def fmf_read_raw(path: Path | str) -> tuple[str, str | None]:
     """
     Reads the full content and raw (unparsed) metadata from the file, both as strings.
     """
-    metadata_str, offset = fmf_read_frontmatter_raw(path)
+    metadata_str, content_offset, _ = fmf_read_frontmatter_raw(path)
 
     with open(path, encoding="utf-8") as f:
-        f.seek(offset)
+        f.seek(content_offset)
         content = f.read()
 
     return content, metadata_str
@@ -155,37 +155,78 @@ def fmf_read_frontmatter(path: Path | str) -> Metadata | None:
     Reads and parses only the metadata frontmatter from the file.
     Returns None if there is no frontmatter.
     """
-    metadata_str, _ = fmf_read_frontmatter_raw(path)
+    metadata_str, _, _ = fmf_read_frontmatter_raw(path)
     return _parse_metadata(path, metadata_str)
 
 
-def fmf_read_frontmatter_raw(path: Path | str) -> tuple[str | None, int]:
+def fmf_read_frontmatter_raw(path: Path | str) -> tuple[str | None, int, int]:
     """
-    Reads the metadata frontmatter from the file and returns the metadata string and
-    the seek offset of the beginning of the content. Does not parse the metadata or
-    read the body content. Returns None, 0 if there is no frontmatter. Safe on binary
-    files.
+    Reads the metadata frontmatter from the file and returns:
+
+    - the metadata string (or None if no frontmatter found)
+    - the content offset (byte position where content begins after frontmatter)
+    - the metadata start offset (byte position where metadata begins, which
+      will be 0 unless there are initial # lines before the frontmatter)
+
+    Does not parse the metadata or read the body content.
+    Returns None, 0, 0 if there is no frontmatter. Safe on binary files.
     """
     metadata_lines: list[str] = []
     in_metadata = False
+    metadata_start_offset = 0
 
     try:
         with open(path, encoding="utf-8") as f:
-            first_line = f.readline().rstrip()
+            # Read the first line to check frontmatter style.
+            line = f.readline()
+            if not line:
+                return None, 0, 0  # Empty file
 
-            if first_line == FmStyle.yaml.start:
+            first_line = line.rstrip()
+
+            # Special case for hash style with potential initial # lines that
+            # are not part of the frontmatter.
+            if first_line.startswith("#"):
+                if first_line == FmStyle.hash.start:
+                    # Direct match for #--- on the first line
+                    delimiters = FmStyle.hash
+                    in_metadata = True
+                    metadata_start_offset = 0
+                else:
+                    # This might be a hash style file with initial # comments.
+                    # See through initial # comment lines.
+                    f.seek(0)
+                    while True:
+                        start_pos = f.tell()
+                        line = f.readline()
+                        if not line:
+                            break
+                        if line.rstrip() == FmStyle.hash.start:
+                            # Found #--- after some initial # lines.
+                            delimiters = FmStyle.hash
+                            in_metadata = True
+                            metadata_start_offset = start_pos
+                            break
+                        elif not line.startswith("#"):
+                            break
+
+            # Standard frontmatter style checks.
+            elif first_line == FmStyle.yaml.start:
                 delimiters = FmStyle.yaml
                 in_metadata = True
+                metadata_start_offset = 0
             elif first_line == FmStyle.html.start:
                 delimiters = FmStyle.html
                 in_metadata = True
-            elif first_line == FmStyle.hash.start:
-                delimiters = FmStyle.hash
-                in_metadata = True
+                metadata_start_offset = 0
             else:
-                # Empty file or no recognized frontmatter.
-                return None, 0
+                # No recognized frontmatter
+                return None, 0, 0
 
+            if not in_metadata:
+                return None, 0, 0
+
+            # Parse the metadata content between delimiters
             while True:
                 line = f.readline()
                 if not line:
@@ -195,12 +236,13 @@ def fmf_read_frontmatter_raw(path: Path | str) -> tuple[str | None, int]:
                     metadata_str = "".join(
                         delimiters.strip_prefix(mline) for mline in metadata_lines
                     )
-                    return metadata_str, f.tell()
+                    content_offset = f.tell()
+                    return metadata_str, content_offset, metadata_start_offset
 
                 if in_metadata:
                     metadata_lines.append(line)
 
-            if in_metadata:  # If still true, the end delimiter was never found
+            if in_metadata:  # End delimiter was never found
                 raise FmFormatError(
                     f"Delimiter `{delimiters.end}` for end of frontmatter not found: `{(path)}`"
                 )
@@ -208,7 +250,7 @@ def fmf_read_frontmatter_raw(path: Path | str) -> tuple[str | None, int]:
         # Was a binary file.
         pass
 
-    return None, 0
+    return None, 0, 0
 
 
 def fmf_has_frontmatter(path: Path | str) -> bool:
@@ -224,15 +266,15 @@ def fmf_strip_frontmatter(path: Path | str) -> None:
     Does not read the content (except to do a file copy) so should work fairly
     quickly on large files. Does nothing if there is no frontmatter.
     """
-    _, offset = fmf_read_frontmatter_raw(path)
-    if offset > 0:
+    _, content_offset, _ = fmf_read_frontmatter_raw(path)
+    if content_offset > 0:
         tmp_path = f"{path}.fmf.strip.tmp"
         try:
             with (
                 open(path, encoding="utf-8") as original_file,
                 open(tmp_path, "w", encoding="utf-8") as temp_file,
             ):
-                original_file.seek(offset)
+                original_file.seek(content_offset)
                 shutil.copyfileobj(original_file, temp_file)
             os.replace(tmp_path, path)
         except Exception as e:
@@ -271,14 +313,14 @@ def fmf_insert_frontmatter(
     tmp_path = f"{path}.fmf.insert.tmp"
 
     try:
-        # Determine where any existing frontmatter ends (offset).
-        _, offset = fmf_read_frontmatter_raw(path)
+        # Determine where any existing frontmatter ends (content_offset).
+        _, content_offset, _ = fmf_read_frontmatter_raw(path)
 
         with open(tmp_path, "w", encoding="utf-8") as temp_file:
             temp_file.writelines(frontmatter_lines)
 
             with open(path, encoding="utf-8") as original_file:
-                original_file.seek(offset)
+                original_file.seek(content_offset)
                 shutil.copyfileobj(original_file, temp_file)
 
         os.replace(tmp_path, path)

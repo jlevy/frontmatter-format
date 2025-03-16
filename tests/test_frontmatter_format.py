@@ -115,21 +115,22 @@ def test_fmf_with_custom_key_sort():
 def test_fmf_metadata():
     os.makedirs("tmp", exist_ok=True)
 
-    # Test offset.
+    # Test offsets.
     file_path = "tmp/test_offset.md"
     content = "Hello, World!"
     metadata = {"title": "Test Title", "author": "Test Author"}
     fmf_write(file_path, content, metadata)
-    result, offset = fmf_read_frontmatter_raw(file_path)
+    result, content_offset, metadata_start_offset = fmf_read_frontmatter_raw(file_path)
     assert result == """title: Test Title\nauthor: Test Author\n"""
-    assert offset == len(result) + 2 * (len("---") + 1)
+    assert content_offset == len(result) + 2 * (len("---") + 1)
+    assert metadata_start_offset == 0  # Metadata starts at beginning of file
 
     # Test a zero-length file.
     zero_length_file = "tmp/empty_file.txt"
     Path(zero_length_file).touch()
 
-    result, offset = fmf_read_frontmatter_raw(zero_length_file)
-    assert (result, offset) == (None, 0)
+    result, content_offset, metadata_start_offset = fmf_read_frontmatter_raw(zero_length_file)
+    assert (result, content_offset, metadata_start_offset) == (None, 0, 0)
 
     # Test stripping metadata from Markdown.
     file_path = "tmp/test_strip_metadata.md"
@@ -157,3 +158,73 @@ def test_fmf_metadata():
     new_content, new_metadata = fmf_read(file_path)
     assert new_metadata == metadata2
     assert new_content == content
+
+
+def test_hash_style_with_initial_hash_lines():
+    """Test that hash style files can have arbitrary # lines before the frontmatter."""
+    os.makedirs("tmp", exist_ok=True)
+
+    # Test with a shebang line before the frontmatter
+    file_path = "tmp/test_hash_with_shebang.py"
+    content = "print('Hello, World!')"
+    metadata = {"title": "Test Title", "author": "Test Author"}
+
+    with open(file_path, "w") as f:
+        f.write("#!/usr/bin/env python\n")
+        f.write("# Python inline script metadata\n")
+        f.write("#---\n")
+        f.write("# title: Test Title\n")
+        f.write("# author: Test Author\n")
+        f.write("#---\n")
+        f.write(content)
+
+    # Read and verify the metadata
+    read_content, read_metadata = fmf_read(file_path)
+    assert read_content.strip() == content
+    assert read_metadata == metadata
+
+    # Test with multiple # lines and comments before the frontmatter
+    file_path = "tmp/test_hash_with_multiple_comments.py"
+
+    with open(file_path, "w") as f:
+        f.write("#!/usr/bin/env python\n")
+        f.write("# Copyright 2025\n")
+        f.write("# This is a sample file\n")
+        f.write("#---\n")
+        f.write("# title: Test Title\n")
+        f.write("# author: Test Author\n")
+        f.write("#---\n")
+        f.write(content)
+
+    # Read and verify the metadata
+    read_content, read_metadata = fmf_read(file_path)
+    assert read_content.strip() == content
+    assert read_metadata == metadata
+
+    # Specifically check that metadata_start_offset is positioned at the #--- line
+    raw_metadata, content_offset, metadata_start_offset = fmf_read_frontmatter_raw(file_path)
+    assert raw_metadata == "title: Test Title\nauthor: Test Author\n"
+
+    # Verify the metadata_start_offset is accurate by reading those bytes
+    with open(file_path, "rb") as f:
+        f.seek(metadata_start_offset)
+        start_line = f.readline().decode("utf-8").strip()
+        assert start_line == "#---"  # The start delimiter
+
+    # Test that non-# lines before #--- are not accepted as hash style
+    file_path = "tmp/test_hash_with_non_hash_lines.py"
+
+    with open(file_path, "w") as f:
+        f.write("#!/usr/bin/env python\n")
+        f.write("import sys  # This is not a comment line\n")
+        f.write("#---\n")
+        f.write("# title: Test Title\n")
+        f.write("# author: Test Author\n")
+        f.write("#---\n")
+        f.write(content)
+
+    # Read and verify there's no metadata (because of the non-# line)
+    result, content_offset, metadata_start_offset = fmf_read_frontmatter_raw(file_path)
+    assert result is None
+    assert content_offset == 0
+    assert metadata_start_offset == 0

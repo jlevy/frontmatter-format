@@ -148,34 +148,44 @@ The allowed frontmatter styles are:
 6. *Dash style*: delimiters `----` and `----` with `-- ` prefix on each line.
    Useful for **SQL** or similar code content.
 
-The delimiters must be alone on their own lines, terminated with a newline.
+Rules:
 
-Any style is acceptable on any file as it can be automatically detected.
-When writing, you can specify the style.
+- The delimiters must be alone on their own lines, terminated with a newline.
 
-For all frontmatter styles, the content between the delimiters is YAML text in UTF-8
-encoding, with an optional prefix on each line that depends on the style.
+- Any frontmatter style is acceptable on any file.
+  When writing a file, you can choose any style, typically the one suitable to the file
+  syntax.
 
-For some of the formats, each frontmatter line is prefixed with a prefix to make sure
-the entire file remains valid in a given syntax (Python, Rust, SQL, etc.). This prefix
-is stripped during parsing.
+- For all frontmatter styles, the content between the delimiters is YAML text in UTF-8
+  encoding, with an optional prefix on each line that depends on the style.
 
-It is recommended to use a prefix with a trailing space (such as `# ` or `// `) but a
-bare prefix without the trailing space (`#` or `##`) is also allowed.
+- For *hash style*, *slash style*, and *dash style*, each frontmatter line begins with
+  with a *prefix* (`# `, `// `, and `-- `, respectively) to make sure the entire file
+  remains valid in a given syntax (Python, Rust, SQL, etc.). This prefix is stripped
+  during parsing. It is *recommended* to use a prefix with a trailing space (`# `, `// `,
+  or `-- `) but bare prefixes without the trailing space (`#`, `//`, or `--`) are
+  allowed.
 
-Other whitespace is preserved (before parsing with YAML).
+- As a special case, *hash style* files may have an arbitrary number of additional lines
+  starting with `#` before the initial `#---` delimiter.
+  This allows for "shebang" lines like `#!/usr/bin/bash` at the top of a file, or for
+  Python
+  [inline script metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/#inline-script-metadata)
+  to work.
 
-Note that YAML comments, which are lines beginning with `#` in the metadata, are
-allowed.
-For example, for hash style, this means there must be two hashes (`# #` or `##`)
-at the start of a comment line.
+- Other than stripping prefixes, all whitespace in the frontmatter is preserved before
+  it is parsed as YAML.
 
-There is no restriction on the content of the file after the frontmatter.
-It may even contain other content in frontmatter format, but this will not be parsed as
-frontmatter. Typically, it is text, but it could be binary as well.
+- Note that YAML comments, which are lines beginning with `#` in the metadata, are
+  allowed. For example, for hash style, this means there must be two hashes (`# #` or
+  `##`) at the start of a comment line, within the delimiters.
 
-Frontmatter is optional.
-This means almost any text file can be read as frontmatter format.
+- There is no restriction on the content of the file after the frontmatter.
+  It may even contain other content in frontmatter format, but this will not be parsed
+  as frontmatter. Typically, it is text, but it could be binary as well.
+
+- Frontmatter is optional.
+  This means almost any text file can be read as frontmatter format.
 
 ## Reference Implementation
 
