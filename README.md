@@ -189,12 +189,7 @@ For readability, there is also support for preferred sorting of YAML keys.
 
 ## Installation
 
-```sh
-# Use pip
-pip install frontmatter-format
-# Or poetry
-poetry add frontmatter-format
-```
+Use pip, poetry, or uv to add `frontmatter-format`.
 
 ## Usage
 
