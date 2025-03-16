@@ -81,6 +81,25 @@ filename: styles.css
 SELECT * FROM world;
 ```
 
+Note that a few scripts like "shebang"-style shell scripts or Python scripts with inline
+dependencies require a first line in a different format.
+This is allowed as long as these `#`-commented lines precede the initial delimiter
+`#---`:
+
+```python
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+#---
+# title: An Example Python Script
+# description: This Script uses PEP 723 style inline dependencies.
+#---
+
+type Point = tuple[float, float]
+print(Point)
+```
+
 Here's an example of a richer metadata in use, from a tool that does video
 transcription. You can see how it's useful having a simple and clear format for title,
 description, history, source of the content, etc.
@@ -107,6 +126,9 @@ description, history, source of the content, etc.
 
 ## Format Definition
 
+Frontmatter is read as a text file, one line at a time, using standard text line reading
+and UTF8 encoding.
+
 A file is in frontmatter format if the first characters are one of the following:
 
 - `---`
@@ -121,11 +143,18 @@ A file is in frontmatter format if the first characters are one of the following
 
 - `-----`
 
-and if this prefix is followed by a newline (`\n`).
+and these characters are followed by a newline (`\n`).
 
-The prefix determines the *style* of the frontmatter.
-The style specifies the matching terminating delimiter for the end of the frontmatter as
-well as an optional prefix (which is typically a comment character in some language).
+This line is called the *initial delimiter*.
+
+The initial delimiter is always at the start of the file, except for a special case:
+Lines at the beginning of a file are ignored if they are consecutive and begin with `#`
+before an initial delimiter of `#---` and a newline (`-n`). In this case, the initial
+delimiter is the first line of the file that is `#---`.
+
+The initial delimiter determines the *style* of the frontmatter.
+The style specifies the matching *terminating delimiter* for the end of the frontmatter
+as well as an optional prefix (which is typically a comment character in some language).
 
 The allowed frontmatter styles are:
 
