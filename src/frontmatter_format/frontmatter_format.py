@@ -295,6 +295,9 @@ def fmf_insert_frontmatter(
     Insert metadata as frontmatter into the given file, inserting at the top
     and replacing any existing frontmatter.
     """
+    # TODO: Add a flag (default on) to seek past # comments before inserting
+    # frontmatter, for compatibility with shebangs and `# /// script` inline
+    # dependencies.
     if not metadata:
         return
 
