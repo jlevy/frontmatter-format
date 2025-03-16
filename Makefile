@@ -1,20 +1,26 @@
+# Makefile for easy development workflows.
+# GitHub Actions call uv directly.
+
 .DEFAULT_GOAL := default
 
-.PHONY: default lint test build install clean
+.PHONY: default install lint test build clean
 
-default: lint test
-
-lint:
-	poetry run python devtools/lint.py
-
-test:
-	poetry run pytest
-
-build:
-	poetry build
+default: install lint test
 
 install:
-	poetry install
+	uv sync --all-extras --dev
+
+lint:
+	uv run python devtools/lint.py
+
+test:
+	uv run pytest
+
+upgrade:
+	uv sync --upgrade
+
+build:
+	uv build
 
 clean:
 	-rm -rf dist/
@@ -22,3 +28,4 @@ clean:
 	-rm -rf .pytest_cache/
 	-rm -rf .mypy_cache/
 	-rm -rf .venv/
+	-find . -type d -name "__pycache__" -exec rm -rf {} +
