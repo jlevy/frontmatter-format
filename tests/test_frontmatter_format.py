@@ -2,12 +2,12 @@ import os
 from pathlib import Path
 
 from frontmatter_format.frontmatter_format import (
+    FmStyle,
     fmf_insert_frontmatter,
     fmf_read,
     fmf_read_frontmatter_raw,
     fmf_strip_frontmatter,
     fmf_write,
-    FmStyle,
 )
 from frontmatter_format.key_sort import custom_key_sort
 from frontmatter_format.yaml_util import dump_yaml
@@ -21,7 +21,7 @@ def test_fmf_basic():
     content_md = "Hello, World!"
     metadata_md = {"title": "Test Title", "author": "Test Author"}
     fmf_write(file_path_md, content_md, metadata_md)
-    with open(file_path_md, "r") as f:
+    with open(file_path_md) as f:
         lines = f.readlines()
     assert lines[0] == FmStyle.yaml.start + "\n"
     assert lines[-1].strip() == content_md
@@ -47,7 +47,7 @@ def test_fmf_basic():
     content_html = "<p>Hello, World!</p>"
     metadata_html = {"title": "Test Title", "author": "Test Author"}
     fmf_write(file_path_html, content_html, metadata_html, style=FmStyle.html)
-    with open(file_path_html, "r") as f:
+    with open(file_path_html) as f:
         lines = f.readlines()
     assert lines[0] == FmStyle.html.start + "\n"
     assert lines[-1].strip() == content_html
@@ -72,7 +72,7 @@ def test_fmf_basic():
     content_code = "print('Hello, World!')"
     metadata_code = {"title": "Test Title", "author": "Test Author"}
     fmf_write(file_path_code, content_code, metadata_code, style=FmStyle.hash)
-    with open(file_path_code, "r") as f:
+    with open(file_path_code) as f:
         lines = f.readlines()
     assert lines[0] == FmStyle.hash.start + "\n"
     assert lines[-1].strip() == content_code
@@ -102,7 +102,7 @@ def test_fmf_with_custom_key_sort():
     content_md = "Hello, World!"
     metadata_md = {"title": "Test Title", "author": "Test Author", "date": "2022-01-01"}
     fmf_write(file_path_md, content_md, metadata_md, key_sort=custom_key_sort(["date", "title"]))
-    with open(file_path_md, "r") as f:
+    with open(file_path_md) as f:
         lines = f.readlines()
     assert lines[0] == FmStyle.yaml.start + "\n"
     assert lines[-1].strip() == content_md
@@ -137,7 +137,7 @@ def test_fmf_metadata():
     metadata = {"title": "Test Title", "author": "Test Author"}
     fmf_write(file_path, content, metadata)
     fmf_strip_frontmatter(file_path)
-    with open(file_path, "r") as f:
+    with open(file_path) as f:
         stripped_content = f.read()
     assert stripped_content.strip() == content
 

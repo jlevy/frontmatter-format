@@ -2,11 +2,12 @@
 YAML file storage. Wraps ruamel.yaml with a few extra features.
 """
 
+from collections.abc import Callable
 from io import StringIO
 from pathlib import Path
-from typing import Any, Callable, List, Optional, TextIO, Type
+from typing import Any, TextIO
 
-from ruamel.yaml import Representer, YAML
+from ruamel.yaml import YAML, Representer
 
 KeySort = Callable[[str], Any]
 
@@ -17,7 +18,7 @@ def none_or_empty_dict(val: Any) -> bool:
 
 YamlCustomizer = Callable[[YAML], None]
 
-_default_yaml_customizers: List[YamlCustomizer] = []
+_default_yaml_customizers: list[YamlCustomizer] = []
 
 
 def add_default_yaml_customizer(customizer: YamlCustomizer):
@@ -27,7 +28,7 @@ def add_default_yaml_customizer(customizer: YamlCustomizer):
     _default_yaml_customizers.append(customizer)
 
 
-def add_default_yaml_representer(type: Type[Any], represent: Callable[[Representer, Any], Any]):
+def add_default_yaml_representer(type: type[Any], represent: Callable[[Representer, Any], Any]):
     """
     Add a default representer for a type.
     """
@@ -35,8 +36,8 @@ def add_default_yaml_representer(type: Type[Any], represent: Callable[[Represent
 
 
 def new_yaml(
-    key_sort: Optional[KeySort] = None,
-    suppress_vals: Optional[Callable[[Any], bool]] = none_or_empty_dict,
+    key_sort: KeySort | None = None,
+    suppress_vals: Callable[[Any], bool] | None = none_or_empty_dict,
     stringify_unknown: bool = False,
     typ: str = "safe",
 ) -> YAML:
@@ -102,7 +103,7 @@ def read_yaml_file(path: str | Path) -> Any:
 
 
 def to_yaml_string(
-    value: Any, key_sort: Optional[KeySort] = None, stringify_unknown: bool = False
+    value: Any, key_sort: KeySort | None = None, stringify_unknown: bool = False
 ) -> str:
     """
     Convert a Python object to a YAML string.
@@ -113,7 +114,7 @@ def to_yaml_string(
 
 
 def dump_yaml(
-    value: Any, stream: TextIO, key_sort: Optional[KeySort] = None, stringify_unknown: bool = False
+    value: Any, stream: TextIO, key_sort: KeySort | None = None, stringify_unknown: bool = False
 ):
     """
     Write a Python object to a YAML stream.
@@ -124,7 +125,7 @@ def dump_yaml(
 def write_yaml_file(
     value: Any,
     path: str | Path,
-    key_sort: Optional[KeySort] = None,
+    key_sort: KeySort | None = None,
     stringify_unknown: bool = False,
 ):
     """

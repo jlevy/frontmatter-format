@@ -1,4 +1,7 @@
 from .frontmatter_format import (
+    FmFormatError,
+    FmStyle,
+    Metadata,
     fmf_has_frontmatter,
     fmf_insert_frontmatter,
     fmf_read,
@@ -7,9 +10,6 @@ from .frontmatter_format import (
     fmf_read_raw,
     fmf_strip_frontmatter,
     fmf_write,
-    FmFormatError,
-    FmStyle,
-    Metadata,
 )
 from .key_sort import custom_key_sort
 from .yaml_util import (

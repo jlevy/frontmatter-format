@@ -14,7 +14,7 @@ def main():
     errcount += _run(["codespell", "--write-changes", *SRC_PATHS, *DOC_PATHS])
     errcount += _run(["ruff", "check", "--fix", *SRC_PATHS])
     errcount += _run(["ruff", "format", *SRC_PATHS])
-    errcount += _run(["mypy", *SRC_PATHS])
+    errcount += _run(["mypy", "--no-incremental", *SRC_PATHS])
 
     rprint()
 

@@ -7,11 +7,11 @@ import shutil
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from ruamel.yaml.error import YAMLError
 
-from .yaml_util import from_yaml_string, KeySort, to_yaml_string
+from .yaml_util import KeySort, from_yaml_string, to_yaml_string
 
 
 class FmFormatError(ValueError):
@@ -25,7 +25,7 @@ class FmDelimiters:
     start: str
     end: str
     prefix: str
-    strip_prefixes: List[str]
+    strip_prefixes: list[str]
 
 
 class FmStyle(Enum):
@@ -56,7 +56,7 @@ class FmStyle(Enum):
         return self.value.prefix
 
     @property
-    def strip_prefixes(self) -> List[str]:
+    def strip_prefixes(self) -> list[str]:
         return self.value.strip_prefixes
 
     def strip_prefix(self, line: str) -> str:
@@ -66,7 +66,7 @@ class FmStyle(Enum):
         return line
 
 
-Metadata = Dict[str, Any]
+Metadata = dict[str, Any]
 """
 Parsed metadata from frontmatter.
 """
@@ -75,9 +75,9 @@ Parsed metadata from frontmatter.
 def fmf_write(
     path: Path | str,
     content: str,
-    metadata: Optional[Metadata | str],
+    metadata: Metadata | str | None,
     style: FmStyle = FmStyle.yaml,
-    key_sort: Optional[KeySort] = None,
+    key_sort: KeySort | None = None,
     make_parents: bool = True,
 ) -> None:
     """
@@ -116,7 +116,7 @@ def fmf_write(
         raise e
 
 
-def _parse_metadata(path: Path | str, metadata_str: Optional[str]) -> Optional[Metadata]:
+def _parse_metadata(path: Path | str, metadata_str: str | None) -> Metadata | None:
     if not metadata_str:
         return None
     try:
@@ -125,7 +125,7 @@ def _parse_metadata(path: Path | str, metadata_str: Optional[str]) -> Optional[M
         raise FmFormatError(f"Error parsing YAML metadata: `{path}`: {e}") from e
 
 
-def fmf_read(path: Path | str) -> Tuple[str, Optional[Metadata]]:
+def fmf_read(path: Path | str) -> tuple[str, Metadata | None]:
     """
     Read UTF-8 text content (typically Markdown) from a file with optional YAML metadata
     in Jekyll-style frontmatter format. Auto-detects variant formats for HTML and code
@@ -137,20 +137,20 @@ def fmf_read(path: Path | str) -> Tuple[str, Optional[Metadata]]:
     return content, metadata
 
 
-def fmf_read_raw(path: Path | str) -> Tuple[str, Optional[str]]:
+def fmf_read_raw(path: Path | str) -> tuple[str, str | None]:
     """
     Reads the full content and raw (unparsed) metadata from the file, both as strings.
     """
     metadata_str, offset = fmf_read_frontmatter_raw(path)
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         f.seek(offset)
         content = f.read()
 
     return content, metadata_str
 
 
-def fmf_read_frontmatter(path: Path | str) -> Optional[Metadata]:
+def fmf_read_frontmatter(path: Path | str) -> Metadata | None:
     """
     Reads and parses only the metadata frontmatter from the file.
     Returns None if there is no frontmatter.
@@ -159,18 +159,18 @@ def fmf_read_frontmatter(path: Path | str) -> Optional[Metadata]:
     return _parse_metadata(path, metadata_str)
 
 
-def fmf_read_frontmatter_raw(path: Path | str) -> Tuple[Optional[str], int]:
+def fmf_read_frontmatter_raw(path: Path | str) -> tuple[str | None, int]:
     """
     Reads the metadata frontmatter from the file and returns the metadata string and
     the seek offset of the beginning of the content. Does not parse the metadata or
     read the body content. Returns None, 0 if there is no frontmatter. Safe on binary
     files.
     """
-    metadata_lines: List[str] = []
+    metadata_lines: list[str] = []
     in_metadata = False
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             first_line = f.readline().rstrip()
 
             if first_line == FmStyle.yaml.start:
@@ -228,9 +228,10 @@ def fmf_strip_frontmatter(path: Path | str) -> None:
     if offset > 0:
         tmp_path = f"{path}.fmf.strip.tmp"
         try:
-            with open(path, "r", encoding="utf-8") as original_file, open(
-                tmp_path, "w", encoding="utf-8"
-            ) as temp_file:
+            with (
+                open(path, encoding="utf-8") as original_file,
+                open(tmp_path, "w", encoding="utf-8") as temp_file,
+            ):
                 original_file.seek(offset)
                 shutil.copyfileobj(original_file, temp_file)
             os.replace(tmp_path, path)
@@ -244,9 +245,9 @@ def fmf_strip_frontmatter(path: Path | str) -> None:
 
 def fmf_insert_frontmatter(
     path: Path | str,
-    metadata: Optional[Metadata],
+    metadata: Metadata | None,
     fm_style: FmStyle = FmStyle.yaml,
-    key_sort: Optional[KeySort] = None,
+    key_sort: KeySort | None = None,
 ) -> None:
     """
     Insert metadata as frontmatter into the given file, inserting at the top
@@ -276,7 +277,7 @@ def fmf_insert_frontmatter(
         with open(tmp_path, "w", encoding="utf-8") as temp_file:
             temp_file.writelines(frontmatter_lines)
 
-            with open(path, "r", encoding="utf-8") as original_file:
+            with open(path, encoding="utf-8") as original_file:
                 original_file.seek(offset)
                 shutil.copyfileobj(original_file, temp_file)
 
