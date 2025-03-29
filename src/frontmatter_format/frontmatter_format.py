@@ -186,6 +186,7 @@ def fmf_read_frontmatter_raw(path: Path | str) -> tuple[str | None, int, int]:
 
             # Special case for hash style with potential initial # lines that
             # are not part of the frontmatter.
+            delimiters = None
             if first_line.startswith("#"):
                 if first_line == FmStyle.hash.start:
                     # Direct match for #--- on the first line
@@ -223,7 +224,7 @@ def fmf_read_frontmatter_raw(path: Path | str) -> tuple[str | None, int, int]:
                 # No recognized frontmatter
                 return None, 0, 0
 
-            if not in_metadata:
+            if not in_metadata or not delimiters:
                 return None, 0, 0
 
             # Parse the metadata content between delimiters

@@ -56,7 +56,7 @@ def new_yaml(
     suppr = suppress_vals or (lambda v: False)
 
     # Ignore None values in output. Sort keys if key_sort is provided.
-    def represent_dict(dumper, data):
+    def represent_dict(dumper, data: Any):  # pyright: ignore
         if key_sort:
             data = {k: data[k] for k in sorted(data.keys(), key=key_sort)}
         return dumper.represent_dict({k: v for k, v in data.items() if not suppr(v)})
@@ -64,7 +64,7 @@ def new_yaml(
     yaml.representer.add_representer(dict, represent_dict)
 
     # Use YAML block style for strings with newlines.
-    def represent_str(dumper, data):
+    def represent_str(dumper, data):  # pyright: ignore
         style = "|" if "\n" in data else None
         return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
 
@@ -76,7 +76,7 @@ def new_yaml(
 
     if stringify_unknown:
 
-        def represent_unknown(dumper, data):
+        def represent_unknown(dumper, data: Any):  # pyright: ignore
             return dumper.represent_str(str(data))
 
         yaml.representer.add_representer(None, represent_unknown)
