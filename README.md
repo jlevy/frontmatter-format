@@ -6,7 +6,7 @@ Simple, readable metadata attached to files can be useful in numerous situations
 as recording title, author, source, copyright, or the provenance of a file.
 
 Unfortunately, it's often unclear how to format such metadata consistently across
-different file types while preserving valid syntax, making parsing easy, and breaking
+different file types while preserving valid syntax, making parsing easy, and not breaking
 interoperability with existing tools.
 
 **Frontmatter format** is a way to add metadata as frontmatter on any file.
