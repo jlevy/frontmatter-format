@@ -1,15 +1,28 @@
 """
-YAML file storage. Wraps ruamel.yaml with a few extra features.
+YAML file storage. Wraps ruamel.yaml with a few extra features and
+convenience functions.
 """
+
+from __future__ import annotations
 
 from collections.abc import Callable
 from io import StringIO
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Literal, TextIO
 
 from ruamel.yaml import YAML, Representer
 
-KeySort = Callable[[str], Any]
+from .key_sort import KeySort
+
+YamlTyp = Literal["rt", "safe", "unsafe", "full", "base"]
+"""
+Valid values for ruamel.yaml YAML() typ parameter:
+- "rt": Round-trip loader/dumper (preserves comments, formatting)
+- "safe": Safe loader/dumper (recommended for untrusted input)
+- "unsafe": Normal/unsafe loader/dumper (pending deprecation)
+- "full": Full dumper including Python built-ins (potentially unsafe)
+- "base": Base loader only
+"""
 
 
 def none_or_empty_dict(val: Any) -> bool:
@@ -36,10 +49,10 @@ def add_default_yaml_representer(type: type[Any], represent: Callable[[Represent
 
 
 def new_yaml(
-    key_sort: KeySort | None = None,
+    key_sort: KeySort[str] | None = None,
     suppress_vals: Callable[[Any], bool] | None = none_or_empty_dict,
     stringify_unknown: bool = False,
-    typ: str = "safe",
+    typ: YamlTyp = "safe",
 ) -> YAML:
     """
     Configure a new YAML instance with custom settings.
@@ -103,30 +116,38 @@ def read_yaml_file(path: str | Path) -> Any:
 
 
 def to_yaml_string(
-    value: Any, key_sort: KeySort | None = None, stringify_unknown: bool = False
+    value: Any,
+    key_sort: KeySort[str] | None = None,
+    stringify_unknown: bool = False,
+    typ: YamlTyp = "rt",
 ) -> str:
     """
     Convert a Python object to a YAML string.
     """
     stream = StringIO()
-    new_yaml(key_sort=key_sort, stringify_unknown=stringify_unknown, typ="rt").dump(value, stream)
+    new_yaml(key_sort=key_sort, stringify_unknown=stringify_unknown, typ=typ).dump(value, stream)
     return stream.getvalue()
 
 
 def dump_yaml(
-    value: Any, stream: TextIO, key_sort: KeySort | None = None, stringify_unknown: bool = False
+    value: Any,
+    stream: TextIO,
+    key_sort: KeySort[str] | None = None,
+    stringify_unknown: bool = False,
+    typ: YamlTyp = "rt",
 ):
     """
     Write a Python object to a YAML stream.
     """
-    new_yaml(key_sort=key_sort, stringify_unknown=stringify_unknown, typ="rt").dump(value, stream)
+    new_yaml(key_sort=key_sort, stringify_unknown=stringify_unknown, typ=typ).dump(value, stream)
 
 
 def write_yaml_file(
     value: Any,
     path: str | Path,
-    key_sort: KeySort | None = None,
+    key_sort: KeySort[str] | None = None,
     stringify_unknown: bool = False,
+    typ: YamlTyp = "rt",
 ):
     """
     Write the given value to the YAML file, creating it atomically.
@@ -135,7 +156,8 @@ def write_yaml_file(
     temp_path = path.with_suffix(".yml.tmp")
     try:
         temp_path.write_text(
-            to_yaml_string(value, key_sort, stringify_unknown=stringify_unknown), encoding="utf-8"
+            to_yaml_string(value, key_sort, stringify_unknown=stringify_unknown, typ=typ),
+            encoding="utf-8",
         )
         temp_path.replace(path)
     except Exception as e:

@@ -40,7 +40,7 @@ classifiers = [
 # ---- Main dependencies ----
 
 dependencies = [
-        "ruamel.yaml>=0.18.6",
+    "ruamel-yaml>=0.18.10",
 ]
 
 

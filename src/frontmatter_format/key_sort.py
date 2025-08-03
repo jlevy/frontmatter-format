@@ -3,8 +3,10 @@ from typing import Any, TypeVar
 
 T = TypeVar("T")
 
+KeySort = Callable[[T], Any]
 
-def custom_key_sort(priority_keys: list[T]) -> Callable[[T], Any]:
+
+def custom_key_sort(priority_keys: list[T]) -> KeySort[T]:
     """
     Custom sort function that prioritizes the specific keys in a certain order, followed
     by all the other keys in natural order.

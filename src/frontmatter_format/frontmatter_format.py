@@ -11,7 +11,8 @@ from typing import Any
 
 from ruamel.yaml.error import YAMLError
 
-from .yaml_util import KeySort, from_yaml_string, to_yaml_string
+from .key_sort import KeySort
+from .yaml_util import from_yaml_string, to_yaml_string
 
 
 class FmFormatError(ValueError):
@@ -77,7 +78,7 @@ def fmf_write(
     content: str,
     metadata: Metadata | str | None,
     style: FmStyle = FmStyle.yaml,
-    key_sort: KeySort | None = None,
+    key_sort: KeySort[str] | None = None,
     make_parents: bool = True,
 ) -> None:
     """
@@ -290,7 +291,7 @@ def fmf_insert_frontmatter(
     path: Path | str,
     metadata: Metadata | None,
     fm_style: FmStyle = FmStyle.yaml,
-    key_sort: KeySort | None = None,
+    key_sort: KeySort[str] | None = None,
 ) -> None:
     """
     Insert metadata as frontmatter into the given file, inserting at the top
