@@ -1,26 +1,33 @@
 # Frontmatter Format
 
+**Frontmatter format** is a simple convention for adding metadata as frontmatter on any
+text file in a tool-compatible way.
+It extends
+[Jekyll-style YAML frontmatter](https://docs.github.com/en/contributing/writing-for-github-docs/using-yaml-frontmatter)
+to work with more file formats.
+
 ## Motivation
 
 Simple, readable metadata attached to files can be useful in numerous situations, such
 as recording title, author, source, copyright, or the provenance of a file.
 
-Unfortunately, it's often unclear how to format such metadata consistently across
-different file types while preserving valid syntax, making parsing easy, and not breaking
-interoperability with existing tools.
+Unfortunately, it’s often unclear how to format such metadata consistently across
+different file types while preserving valid syntax, making parsing easy, and not
+breaking interoperability with existing tools.
 
-**Frontmatter format** is a way to add metadata as frontmatter on any file.
-It is basically a micro-format: a simple set of conventions to put structured metadata
-as YAML at the top of a file in a syntax that is broadly compatible with programming
-languages, browsers, editors, and other tools.
+Frontmatter format is basically a micro-format: a simple set of conventions to put
+structured metadata as YAML at the top of a file in a syntax that is broadly compatible
+with programming languages, browsers, editors, and other tools.
 
 Frontmatter format specifies a syntax for the metadata as a comment block at the top of
 a file. This approach works while ensuring the file remains valid Markdown, HTML, CSS,
 Python, C/C++, Rust, SQL, or most other text formats.
 
-Frontmatter format is a generalization of the common format for frontmatter used by
-Jekyll and other CMSs for Markdown files.
-In that format, frontmatter is enclosed in lines containing `---` delimiters.
+Frontmatter format is a generalization of the YAML frontmatter already used by
+[Jekyll](https://jekyllrb.com/docs/front-matter/),
+[11ty](https://www.11ty.dev/docs/data-frontmatter/#front-matter-formats), and other CMSs
+for Markdown files. In that format, frontmatter is enclosed in lines containing `---`
+delimiters.
 
 In this generalized format, we allow several styles of frontmatter demarcation, with the
 first line of the file indicating the format and style.
@@ -100,8 +107,8 @@ type Point = tuple[float, float]
 print(Point)
 ```
 
-Here's an example of a richer metadata in use, from a tool that does video
-transcription. You can see how it's useful having a simple and clear format for title,
+Here’s an example of a richer metadata in use, from a tool that does video
+transcription. You can see how it’s useful having a simple and clear format for title,
 description, history, source of the content, etc.
 
 ![Credit for video to @KBoges on YouTube](images/example.png)
@@ -109,15 +116,15 @@ description, history, source of the content, etc.
 ## Advantages of this Approach
 
 - **Compatible with existing syntax:** By choosing a style for the metadata consistent
-  with any given file, it generally doesn't break existing tools.
+  with any given file, it generally doesn’t break existing tools.
   Almost every language has a style for which frontmatter works as a comment.
 
 - **Auto-detectable format:** Frontmatter and its format can be recognized by the first
   few bytes of the file.
-  That means it's possible to detect metadata and parse it automatically.
+  That means it’s possible to detect metadata and parse it automatically.
 
 - **Metadata is optional:** Files with or without metadata can be read with the same
-  tools. So it's easy to roll out metadata into files gracefully, as needed file by file.
+  tools. So it’s easy to roll out metadata into files gracefully, as needed file by file.
 
 - **YAML syntax:** JSON, YAML, XML, and TOML are all used for metadata in some
   situations. YAML is the best choice here because it is already in widespread use with
@@ -197,7 +204,7 @@ Rules:
 
 - As a special case, *hash style* files may have an arbitrary number of additional lines
   starting with `#` before the initial `#---` delimiter.
-  This allows for "shebang" lines like `#!/usr/bin/bash` at the top of a file, or for
+  This allows for “shebang” lines like `#!/usr/bin/bash` at the top of a file, or for
   Python
   [inline script metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/#inline-script-metadata)
   to work.
@@ -314,18 +321,18 @@ print(raw_metadata)  # 'title: Test Title\nauthor: Test Author\n'
 
 ## FAQ
 
-- **Hasn't this been done before?** Possibly, but as far as I can tell, not in a
+- **Hasn’t this been done before?** Possibly, but as far as I can tell, not in a
   systematic way for multiple file formats.
-  I needed this myself, and think we'd all be better off if more tools used YAML
-  metadata consistently, so I've released the format and implementation here.
+  I needed this myself, and think we’d all be better off if more tools used YAML
+  metadata consistently, so I’ve released the format and implementation here.
 
-- **Is this mature?** This is the first draft of this format.
-  But I've been using this on my own projects for a couple months.
+- **Is this mature?** This is pretty new.
+  But I’ve been using this format and package on my own projects successfully.
   The flexibity of just having metadata on all your text files has been great for
   workflows, pipelines, etc.
 
 - **When should we use it?** All the time if you can!
-  It's especially important for command-line tools, AI agents, LLM workflows, since you
+  It’s especially important for command-line tools, AI agents, LLM workflows, since you
   often want to store extra metadata is a consistent way on text inputs of various
   formats like Markdown, HTML, CSS, and Python.
 
@@ -335,12 +342,19 @@ print(raw_metadata)  # 'title: Test Title\nauthor: Test Author\n'
   Standardizing headings like title, author, description, let alone other more
   application-specific information is beyond the scope of this frontmatter format.
 
+- **Why not JSON?** Well, JSON is also valid [YAML 1.2](https://yaml.org/spec/1.2.2/)!
+  You can simply use JSON if desired and it should work.
+  This library uses [ruamel.yaml](https://pypi.org/project/ruamel.yaml/), which is YAML
+  1.2 compliant. A few YAML parsers do have issues with corner cases of JSON, like
+  duplicated keys, special numbers like NaN, etc.
+  but if you are using simple and clean metadata this isn’t likely to be a problem.
+
 - **Can this work with Pydantic?** Yes, definitely.
-  In fact, I think it's probably a good practice to define self-identifiable Pydantic
+  In fact, I think it’s probably a good practice to define self-identifiable Pydantic
   (or Zod) schemas for all your metadata, and then just serialize and deserialize them
   to frontmatter everywhere.
 
-- **Isn't this the same as what some CMSs use, Markdown files and YAML at the top?**
+- **Isn’t this the same as what some CMSs use, Markdown files and YAML at the top?**
   Yes! But this generalizes that format, and removes the direct tie-in to Markdown or any
   CMS. This can work with any tool.
   For HTML and code, it works basically with no changes at all since the frontmatter is
@@ -353,17 +367,16 @@ print(raw_metadata)  # 'title: Test Title\nauthor: Test Author\n'
 - **Does this work for CSV files?** Sort of.
   Some tools do properly honor hash style comments when parsing CSV files.
   A few do not. Our recommendation is go ahead and use it, and find ways to strip the
-  metadata at the last minute if you really can't get a tool to work with the metadata.
-
+  metadata at the last minute if you really can’t get a tool to work with the metadata.
 
 - **Does this also work for YAML files?** Yes!
-  It's fine to have YAML metadata on YAML metadata.
+  It’s fine to have YAML metadata on YAML metadata.
   There are just two nuances.
 
   Firstly, watch out for duplicate `---` separators, if you insert frontmatter in front
   of a file that already has it.
 
-  Secondly, it's up to you to use the YAML itself to distinguish whether a file has
+  Secondly, it’s up to you to use the YAML itself to distinguish whether a file has
   frontmatter or is just a plain YAML file.
   Both of these can be avoided if you use plain YAML with `---` separators only when
   using frontmatter format.
