@@ -18,11 +18,11 @@ The `Makefile` simply offers shortcuts to `uv` commands for developer convenienc
 
 ```shell
 # First, install all dependencies and set up your virtual environment.
-# This simply runs `uv sync --all-extras --dev` to install all packages,
+# This simply runs `uv sync --all-extras` to install all packages,
 # including dev dependencies and optional dependencies.
 make install
 
-# Run uv sync, lint, and test:
+# Run uv sync, lint, and test (and also generate agent rules):
 make
 
 # Build wheel:
@@ -66,6 +66,17 @@ source .venv/bin/activate
 ```
 
 See [uv docs](https://docs.astral.sh/uv/) for details.
+
+## Agent Rules
+
+See [.cursor/rules](.cursor/rules) for agent rules.
+These are written for [Cursor](https://www.cursor.com/) but are also used by other
+agents because the Makefile will generate `CLAUDE.md` and `AGENTS.md` from the same
+rules.
+
+```shell
+make agent-rules
+```
 
 ## IDE setup
 

@@ -1,9 +1,9 @@
 # Changes here will be overwritten by Copier. Do not edit manually.
-_commit: v0.2.2
+_commit: v0.2.15
 _src_path: gh:jlevy/simple-modern-uv
 package_author_email: joshua@cal.berkeley.edu
 package_author_name: Joshua Levy
-package_description: A micro-format for YAML metadata on any file.
+package_description: A simple convention for YAML metadata on any text file
 package_github_org: jlevy
 package_module: frontmatter_format
 package_name: frontmatter-format
