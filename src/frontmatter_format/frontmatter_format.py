@@ -121,7 +121,12 @@ def _parse_metadata(path: Path | str, metadata_str: str | None) -> Metadata | No
     if not metadata_str:
         return None
     try:
-        return from_yaml_string(metadata_str)
+        parsed = from_yaml_string(metadata_str)
+        if not isinstance(parsed, dict):
+            raise FmFormatError(
+                f"Expected YAML metadata to be a dict, got {type(parsed)}: `{path}`"
+            )
+        return parsed
     except YAMLError as e:
         raise FmFormatError(f"Error parsing YAML metadata: `{path}`: {e}") from e
 

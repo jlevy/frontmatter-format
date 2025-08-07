@@ -2,9 +2,11 @@ import os
 from pathlib import Path
 
 from frontmatter_format.frontmatter_format import (
+    FmFormatError,
     FmStyle,
     fmf_insert_frontmatter,
     fmf_read,
+    fmf_read_frontmatter,
     fmf_read_frontmatter_raw,
     fmf_strip_frontmatter,
     fmf_write,
@@ -228,3 +230,35 @@ def test_hash_style_with_initial_hash_lines():
     assert result is None
     assert content_offset == 0
     assert metadata_start_offset == 0
+
+
+def test_non_dict_metadata_raises():
+    os.makedirs("tmp", exist_ok=True)
+
+    # Frontmatter that parses to a list, not a dict
+    file_path = "tmp/test_non_dict_metadata.md"
+    with open(file_path, "w") as f:
+        f.write("---\n")
+        f.write("- one\n")
+        f.write("- two\n")
+        f.write("---\n")
+        f.write("Body text\n")
+
+    # Raw read should succeed and return the YAML string
+    raw, content_offset, metadata_start = fmf_read_frontmatter_raw(file_path)
+    assert raw == "- one\n- two\n"
+    assert content_offset > 0
+    assert metadata_start == 0
+
+    # Parsed reads should raise FmFormatError because YAML is not a dict
+    try:
+        _ = fmf_read_frontmatter(file_path)
+        raise AssertionError("Expected FmFormatError for non-dict metadata")
+    except FmFormatError:
+        pass
+
+    try:
+        _content, _meta = fmf_read(file_path)
+        raise AssertionError("Expected FmFormatError for non-dict metadata in fmf_read")
+    except FmFormatError:
+        pass
