@@ -148,7 +148,7 @@ A file is in frontmatter format if the first characters are one of the following
 
 - `/*---`
 
-- `-----`
+- `----`
 
 and these characters are followed by a newline (`\n`).
 
@@ -380,6 +380,12 @@ print(raw_metadata)  # 'title: Test Title\nauthor: Test Author\n'
   frontmatter or is just a plain YAML file.
   Both of these can be avoided if you use plain YAML with `---` separators only when
   using frontmatter format.
+
+For how to install uv and Python, see [installation.md](docs/installation.md).
+
+For development workflows, see [development.md](docs/development.md).
+
+For instructions on publishing to PyPI, see [publishing.md](docs/publishing.md).
 
 * * *
 

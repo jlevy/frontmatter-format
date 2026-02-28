@@ -1,13 +1,11 @@
-import os
+from pathlib import Path
 
 from frontmatter_format.key_sort import custom_key_sort
 from frontmatter_format.yaml_util import read_yaml_file, write_yaml_file
 
 
-def test_write_yaml_file_with_custom_key_sort():
-    os.makedirs("tmp", exist_ok=True)
-
-    file_path = "tmp/test_write_yaml_file.yaml"
+def test_write_yaml_file_with_custom_key_sort(tmp_path: Path):
+    file_path = tmp_path / "test_write_yaml_file.yaml"
     data = {"title": "Test Title", "author": "Test Author", "date": "2022-01-01"}
     priority_keys = ["date", "title"]
     write_yaml_file(data, file_path, key_sort=custom_key_sort(priority_keys))
@@ -19,10 +17,8 @@ def test_write_yaml_file_with_custom_key_sort():
     ]
 
 
-def test_write_yaml_file_with_suppress_vals():
-    os.makedirs("tmp", exist_ok=True)
-
-    file_path = "tmp/test_write_yaml_file_suppress_vals.yaml"
+def test_write_yaml_file_with_suppress_vals(tmp_path: Path):
+    file_path = tmp_path / "test_write_yaml_file_suppress_vals.yaml"
     data = {
         "title": "Test Title",
         "author": "Test Author",
