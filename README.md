@@ -381,6 +381,12 @@ print(raw_metadata)  # 'title: Test Title\nauthor: Test Author\n'
   Both of these can be avoided if you use plain YAML with `---` separators only when
   using frontmatter format.
 
+For how to install uv and Python, see [installation.md](docs/installation.md).
+
+For development workflows, see [development.md](docs/development.md).
+
+For instructions on publishing to PyPI, see [publishing.md](docs/publishing.md).
+
 * * *
 
 *This project was built from
