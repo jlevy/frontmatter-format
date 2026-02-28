@@ -1,5 +1,6 @@
-import os
 from pathlib import Path
+
+import pytest
 
 from frontmatter_format.frontmatter_format import (
     FmFormatError,
@@ -15,23 +16,20 @@ from frontmatter_format.key_sort import custom_key_sort
 from frontmatter_format.yaml_util import dump_yaml
 
 
-def test_fmf_basic():
-    os.makedirs("tmp", exist_ok=True)
-
+def test_fmf_basic(tmp_path: Path):
     # Test with Markdown.
-    file_path_md = "tmp/test_write.md"
+    file_path_md = tmp_path / "test_write.md"
     content_md = "Hello, World!"
     metadata_md = {"title": "Test Title", "author": "Test Author"}
     fmf_write(file_path_md, content_md, metadata_md)
-    with open(file_path_md) as f:
-        lines = f.readlines()
+    lines = file_path_md.read_text().splitlines(keepends=True)
     assert lines[0] == FmStyle.yaml.start + "\n"
     assert lines[-1].strip() == content_md
     assert "title: Test Title\n" in lines
     assert "author: Test Author\n" in lines
 
     # Test reading Markdown.
-    file_path_md = "tmp/test_read.md"
+    file_path_md = tmp_path / "test_read.md"
     content_md = "Hello, World!"
     metadata_md = {"title": "Test Title", "author": "Test Author"}
     with open(file_path_md, "w") as f:
@@ -45,19 +43,18 @@ def test_fmf_basic():
     assert read_metadata_md == metadata_md
 
     # Test with HTML.
-    file_path_html = "tmp/test_write.html"
+    file_path_html = tmp_path / "test_write.html"
     content_html = "<p>Hello, World!</p>"
     metadata_html = {"title": "Test Title", "author": "Test Author"}
     fmf_write(file_path_html, content_html, metadata_html, style=FmStyle.html)
-    with open(file_path_html) as f:
-        lines = f.readlines()
+    lines = file_path_html.read_text().splitlines(keepends=True)
     assert lines[0] == FmStyle.html.start + "\n"
     assert lines[-1].strip() == content_html
     assert "title: Test Title\n" in lines
     assert "author: Test Author\n" in lines
 
     # Test reading HTML.
-    file_path_html = "tmp/test_read.html"
+    file_path_html = tmp_path / "test_read.html"
     content_html = "<p>Hello, World!</p>"
     metadata_html = {"title": "Test Title", "author": "Test Author"}
     with open(file_path_html, "w") as f:
@@ -70,19 +67,18 @@ def test_fmf_basic():
     assert read_metadata_html == metadata_html
 
     # Test with code frontmatter.
-    file_path_code = "tmp/test_write_code.py"
+    file_path_code = tmp_path / "test_write_code.py"
     content_code = "print('Hello, World!')"
     metadata_code = {"title": "Test Title", "author": "Test Author"}
     fmf_write(file_path_code, content_code, metadata_code, style=FmStyle.hash)
-    with open(file_path_code) as f:
-        lines = f.readlines()
+    lines = file_path_code.read_text().splitlines(keepends=True)
     assert lines[0] == FmStyle.hash.start + "\n"
     assert lines[-1].strip() == content_code
     assert "# title: Test Title\n" in lines
     assert "# author: Test Author\n" in lines
 
     # Test reading code frontmatter.
-    file_path_code = "tmp/test_read_code.py"
+    file_path_code = tmp_path / "test_read_code.py"
     content_code = "print('Hello, World!')"
     metadata_code = {"title": "Test Title", "author": "Test Author"}
     with open(file_path_code, "w") as f:
@@ -96,16 +92,64 @@ def test_fmf_basic():
     assert read_metadata_code == metadata_code
 
 
-def test_fmf_with_custom_key_sort():
-    os.makedirs("tmp", exist_ok=True)
+def test_fmf_slash_style(tmp_path: Path):
+    """Test write/read round-trip for slash (Rust/C++) style frontmatter."""
+    file_path = tmp_path / "test.rs"
+    content = "fn main() {}"
+    metadata = {"title": "Test Title", "author": "Test Author"}
 
+    fmf_write(file_path, content, metadata, style=FmStyle.slash)
+    lines = file_path.read_text().splitlines(keepends=True)
+    assert lines[0] == "//---\n"
+    assert "// title: Test Title\n" in lines
+    assert "// author: Test Author\n" in lines
+
+    read_content, read_metadata = fmf_read(file_path)
+    assert read_content.strip() == content
+    assert read_metadata == metadata
+
+
+def test_fmf_slash_star_style(tmp_path: Path):
+    """Test write/read round-trip for slash-star (CSS/JS/C) style frontmatter."""
+    file_path = tmp_path / "test.css"
+    content = ".hello { color: green; }"
+    metadata = {"title": "Test Title", "author": "Test Author"}
+
+    fmf_write(file_path, content, metadata, style=FmStyle.slash_star)
+    lines = file_path.read_text().splitlines(keepends=True)
+    assert lines[0] == "/*---\n"
+    assert "title: Test Title\n" in lines
+    assert "author: Test Author\n" in lines
+
+    read_content, read_metadata = fmf_read(file_path)
+    assert read_content.strip() == content
+    assert read_metadata == metadata
+
+
+def test_fmf_dash_style(tmp_path: Path):
+    """Test write/read round-trip for dash (SQL) style frontmatter."""
+    file_path = tmp_path / "test.sql"
+    content = "SELECT * FROM world;"
+    metadata = {"title": "Test Title", "author": "Test Author"}
+
+    fmf_write(file_path, content, metadata, style=FmStyle.dash)
+    lines = file_path.read_text().splitlines(keepends=True)
+    assert lines[0] == "----\n"
+    assert "-- title: Test Title\n" in lines
+    assert "-- author: Test Author\n" in lines
+
+    read_content, read_metadata = fmf_read(file_path)
+    assert read_content.strip() == content
+    assert read_metadata == metadata
+
+
+def test_fmf_with_custom_key_sort(tmp_path: Path):
     # Test with Markdown.
-    file_path_md = "tmp/test_write_custom_sort.md"
+    file_path_md = tmp_path / "test_write_custom_sort.md"
     content_md = "Hello, World!"
     metadata_md = {"title": "Test Title", "author": "Test Author", "date": "2022-01-01"}
     fmf_write(file_path_md, content_md, metadata_md, key_sort=custom_key_sort(["date", "title"]))
-    with open(file_path_md) as f:
-        lines = f.readlines()
+    lines = file_path_md.read_text().splitlines(keepends=True)
     assert lines[0] == FmStyle.yaml.start + "\n"
     assert lines[-1].strip() == content_md
     # Check that the priority keys come first in the order they are in the list
@@ -114,11 +158,9 @@ def test_fmf_with_custom_key_sort():
     assert lines[3].strip() == "author: Test Author"
 
 
-def test_fmf_metadata():
-    os.makedirs("tmp", exist_ok=True)
-
+def test_fmf_metadata(tmp_path: Path):
     # Test offsets.
-    file_path = "tmp/test_offset.md"
+    file_path = tmp_path / "test_offset.md"
     content = "Hello, World!"
     metadata = {"title": "Test Title", "author": "Test Author"}
     fmf_write(file_path, content, metadata)
@@ -128,28 +170,26 @@ def test_fmf_metadata():
     assert metadata_start_offset == 0  # Metadata starts at beginning of file
 
     # Test a zero-length file.
-    zero_length_file = "tmp/empty_file.txt"
-    Path(zero_length_file).touch()
+    zero_length_file = tmp_path / "empty_file.txt"
+    zero_length_file.touch()
 
     result, content_offset, metadata_start_offset = fmf_read_frontmatter_raw(zero_length_file)
     assert (result, content_offset, metadata_start_offset) == (None, 0, 0)
 
     # Test stripping metadata from Markdown.
-    file_path = "tmp/test_strip_metadata.md"
+    file_path = tmp_path / "test_strip_metadata.md"
     content = "Hello, World!"
     metadata = {"title": "Test Title", "author": "Test Author"}
     fmf_write(file_path, content, metadata)
     fmf_strip_frontmatter(file_path)
-    with open(file_path) as f:
-        stripped_content = f.read()
+    stripped_content = file_path.read_text()
     assert stripped_content.strip() == content
 
     # Test inserting metadata into a file without frontmatter.
-    file_path = "tmp/test_insert_no_frontmatter.md"
+    file_path = tmp_path / "test_insert_no_frontmatter.md"
     content = "Hello, World!"
     metadata = {"title": "Test Title", "author": "Test Author"}
-    with open(file_path, "w") as f:
-        f.write(content)
+    file_path.write_text(content)
     fmf_insert_frontmatter(file_path, metadata)
     new_content, new_metadata = fmf_read(file_path)
     assert new_metadata == metadata
@@ -162,15 +202,13 @@ def test_fmf_metadata():
     assert new_content == content
 
 
-def test_hash_style_with_initial_hash_lines():
+def test_hash_style_with_initial_hash_lines(tmp_path: Path):
     """Test that hash style files can have arbitrary # lines before the frontmatter."""
-    os.makedirs("tmp", exist_ok=True)
-
-    # Test with a shebang line before the frontmatter
-    file_path = "tmp/test_hash_with_shebang.py"
     content = "print('Hello, World!')"
     metadata = {"title": "Test Title", "author": "Test Author"}
 
+    # Test with a shebang line before the frontmatter
+    file_path = tmp_path / "test_hash_with_shebang.py"
     with open(file_path, "w") as f:
         f.write("#!/usr/bin/env python\n")
         f.write("# Python inline script metadata\n")
@@ -186,8 +224,7 @@ def test_hash_style_with_initial_hash_lines():
     assert read_metadata == metadata
 
     # Test with multiple # lines and comments before the frontmatter
-    file_path = "tmp/test_hash_with_multiple_comments.py"
-
+    file_path = tmp_path / "test_hash_with_multiple_comments.py"
     with open(file_path, "w") as f:
         f.write("#!/usr/bin/env python\n")
         f.write("# Copyright 2025\n")
@@ -214,8 +251,7 @@ def test_hash_style_with_initial_hash_lines():
         assert start_line == "#---"  # The start delimiter
 
     # Test that non-# lines before #--- are not accepted as hash style
-    file_path = "tmp/test_hash_with_non_hash_lines.py"
-
+    file_path = tmp_path / "test_hash_with_non_hash_lines.py"
     with open(file_path, "w") as f:
         f.write("#!/usr/bin/env python\n")
         f.write("import sys  # This is not a comment line\n")
@@ -232,11 +268,9 @@ def test_hash_style_with_initial_hash_lines():
     assert metadata_start_offset == 0
 
 
-def test_non_dict_metadata_raises():
-    os.makedirs("tmp", exist_ok=True)
-
+def test_non_dict_metadata_raises(tmp_path: Path):
     # Frontmatter that parses to a list, not a dict
-    file_path = "tmp/test_non_dict_metadata.md"
+    file_path = tmp_path / "test_non_dict_metadata.md"
     with open(file_path, "w") as f:
         f.write("---\n")
         f.write("- one\n")
@@ -251,14 +285,8 @@ def test_non_dict_metadata_raises():
     assert metadata_start == 0
 
     # Parsed reads should raise FmFormatError because YAML is not a dict
-    try:
-        _ = fmf_read_frontmatter(file_path)
-        raise AssertionError("Expected FmFormatError for non-dict metadata")
-    except FmFormatError:
-        pass
+    with pytest.raises(FmFormatError):
+        fmf_read_frontmatter(file_path)
 
-    try:
-        _content, _meta = fmf_read(file_path)
-        raise AssertionError("Expected FmFormatError for non-dict metadata in fmf_read")
-    except FmFormatError:
-        pass
+    with pytest.raises(FmFormatError):
+        fmf_read(file_path)

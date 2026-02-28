@@ -226,6 +226,18 @@ def fmf_read_frontmatter_raw(path: Path | str) -> tuple[str | None, int, int]:
                 delimiters = FmStyle.html
                 in_metadata = True
                 metadata_start_offset = 0
+            elif first_line == FmStyle.slash.start:
+                delimiters = FmStyle.slash
+                in_metadata = True
+                metadata_start_offset = 0
+            elif first_line == FmStyle.slash_star.start:
+                delimiters = FmStyle.slash_star
+                in_metadata = True
+                metadata_start_offset = 0
+            elif first_line == FmStyle.dash.start:
+                delimiters = FmStyle.dash
+                in_metadata = True
+                metadata_start_offset = 0
             else:
                 # No recognized frontmatter
                 return None, 0, 0
