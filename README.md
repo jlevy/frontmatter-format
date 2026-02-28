@@ -148,7 +148,7 @@ A file is in frontmatter format if the first characters are one of the following
 
 - `/*---`
 
-- `-----`
+- `----`
 
 and these characters are followed by a newline (`\n`).
 

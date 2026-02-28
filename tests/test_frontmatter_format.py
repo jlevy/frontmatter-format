@@ -143,6 +143,22 @@ def test_fmf_dash_style(tmp_path: Path):
     assert read_metadata == metadata
 
 
+def test_fmf_five_dashes_is_not_frontmatter(tmp_path: Path):
+    """Test that five dashes are not recognized as a valid frontmatter delimiter."""
+    file_path = tmp_path / "five_dashes.md"
+    file_text = "-----\nhello\n"
+    file_path.write_text(file_text)
+
+    raw, content_offset, metadata_start_offset = fmf_read_frontmatter_raw(file_path)
+    assert raw is None
+    assert content_offset == 0
+    assert metadata_start_offset == 0
+
+    read_content, read_metadata = fmf_read(file_path)
+    assert read_content == file_text
+    assert read_metadata is None
+
+
 def test_fmf_with_custom_key_sort(tmp_path: Path):
     # Test with Markdown.
     file_path_md = tmp_path / "test_write_custom_sort.md"
