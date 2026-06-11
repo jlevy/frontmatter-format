@@ -272,6 +272,76 @@ def fmf_read_frontmatter_raw(path: Path | str) -> tuple[str | None, int, int]:
     return None, 0, 0
 
 
+def fmf_split_frontmatter(content: str, strict: bool = True) -> tuple[str | None, int, int]:
+    """
+    The in-memory analog of `fmf_read_frontmatter_raw`: parse metadata frontmatter from a
+    string rather than a file. Returns:
+
+    - the metadata string (or None if no frontmatter is found)
+    - the content offset (character position where the body begins, after the frontmatter)
+    - the metadata start offset (character position where the metadata begins, 0 unless
+      there are initial `#` lines before hash-style frontmatter)
+
+    Offsets are character (Unicode code point) positions into `content`, so `content[:offset]`
+    is the frontmatter region and `content[offset:]` is the body. (This differs from the
+    file-based `fmf_read_frontmatter_raw`, whose offsets are byte positions for file seeking.)
+    Does not parse the metadata or the body.
+
+    Returns `(None, 0, 0)` when there is no opening delimiter. When an opening delimiter is
+    found but the closing one is missing, raises `FmFormatError` if `strict` is True (matching
+    `fmf_read_frontmatter_raw`), or returns `(None, 0, 0)` if `strict` is False — so callers
+    that treat a bare leading delimiter as ordinary content (e.g. a Markdown `---` thematic
+    break) can opt out of the error.
+    """
+    lines = content.splitlines(keepends=True)
+    if not lines:
+        return None, 0, 0
+
+    first_line = lines[0].rstrip()
+
+    delimiters: FmStyle | None = None
+    metadata_start_offset = 0
+    first_metadata_line = 1  # line index of the first metadata line, after the opener
+
+    if first_line.startswith("#"):
+        if first_line == FmStyle.hash.start:
+            delimiters = FmStyle.hash
+        else:
+            # Hash style possibly preceded by ordinary `#` comment lines.
+            offset = 0
+            for i, line in enumerate(lines):
+                if line.rstrip() == FmStyle.hash.start:
+                    delimiters = FmStyle.hash
+                    metadata_start_offset = offset
+                    first_metadata_line = i + 1
+                    break
+                if not line.startswith("#"):
+                    break
+                offset += len(line)
+    else:
+        for style in (FmStyle.yaml, FmStyle.html, FmStyle.slash, FmStyle.slash_star, FmStyle.dash):
+            if first_line == style.start:
+                delimiters = style
+                break
+
+    if delimiters is None:
+        return None, 0, 0
+
+    metadata_lines: list[str] = []
+    pos = sum(len(lines[i]) for i in range(first_metadata_line))
+    for line in lines[first_metadata_line:]:
+        pos += len(line)
+        if line.rstrip() == delimiters.end:
+            metadata_str = "".join(delimiters.strip_prefix(mline) for mline in metadata_lines)
+            return metadata_str, pos, metadata_start_offset
+        metadata_lines.append(line)
+
+    # Opening delimiter found but the closing delimiter was never reached.
+    if strict:
+        raise FmFormatError(f"Delimiter `{delimiters.end}` for end of frontmatter not found")
+    return None, 0, 0
+
+
 def fmf_has_frontmatter(path: Path | str) -> bool:
     """
     Returns True if the file has frontmatter, False otherwise. Safe on binary files.

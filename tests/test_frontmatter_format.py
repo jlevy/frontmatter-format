@@ -9,6 +9,7 @@ from frontmatter_format.frontmatter_format import (
     fmf_read,
     fmf_read_frontmatter,
     fmf_read_frontmatter_raw,
+    fmf_split_frontmatter,
     fmf_strip_frontmatter,
     fmf_write,
 )
@@ -306,3 +307,53 @@ def test_non_dict_metadata_raises(tmp_path: Path):
 
     with pytest.raises(FmFormatError):
         fmf_read(file_path)
+
+
+def test_fmf_split_frontmatter_basic():
+    content = "---\ntitle: Hello\ntags: [a, b]\n---\n\n# Body\n\nText.\n"
+    metadata_str, content_offset, metadata_start = fmf_split_frontmatter(content)
+    assert metadata_str == "title: Hello\ntags: [a, b]\n"
+    assert metadata_start == 0
+    # Offsets are character positions: the slices are exact.
+    assert content[:content_offset] == "---\ntitle: Hello\ntags: [a, b]\n---\n"
+    assert content[content_offset:] == "\n# Body\n\nText.\n"
+
+
+def test_fmf_split_frontmatter_matches_file_reader(tmp_path: Path):
+    content = "---\ntitle: T\nauthor: A\n---\nBody only.\n"
+    (tmp_path / "doc.md").write_text(content, encoding="utf-8")
+    file_meta, _, file_start = fmf_read_frontmatter_raw(tmp_path / "doc.md")
+    str_meta, _, str_start = fmf_split_frontmatter(content)
+    # Same metadata string and start; for ASCII content the offsets also agree.
+    assert str_meta == file_meta
+    assert str_start == file_start
+
+
+def test_fmf_split_frontmatter_offsets_are_code_points():
+    # A multi-byte char in the frontmatter: character offsets must slice correctly where
+    # byte offsets would not.
+    content = "---\ntitle: café — déjà\n---\nbody\n"
+    _, content_offset, _ = fmf_split_frontmatter(content)
+    assert content[content_offset:] == "body\n"
+
+
+def test_fmf_split_frontmatter_no_frontmatter():
+    assert fmf_split_frontmatter("# Just a heading\n\nText.\n") == (None, 0, 0)
+    # Five dashes is not a frontmatter delimiter.
+    assert fmf_split_frontmatter("-----\nnot frontmatter\n") == (None, 0, 0)
+
+
+def test_fmf_split_frontmatter_unclosed_delimiter():
+    # A bare leading `---` with no closing delimiter: strict raises, lenient returns None
+    # (so a caller can treat it as a Markdown thematic break, not frontmatter).
+    unclosed = "---\n\nA thematic break rule above, no closing delimiter.\n"
+    with pytest.raises(FmFormatError):
+        fmf_split_frontmatter(unclosed)
+    assert fmf_split_frontmatter(unclosed, strict=False) == (None, 0, 0)
+
+
+def test_fmf_split_frontmatter_html_style():
+    content = "<!---\ntitle: H\n--->\nbody\n"
+    metadata_str, content_offset, _ = fmf_split_frontmatter(content)
+    assert metadata_str == "title: H\n"
+    assert content[content_offset:] == "body\n"
