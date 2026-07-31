@@ -5,7 +5,7 @@ convenience functions.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from io import StringIO
 from pathlib import Path
 from typing import Any, Literal, TextIO
@@ -32,6 +32,62 @@ def none_or_empty_dict(val: Any) -> bool:
 YamlCustomizer = Callable[[YAML], None]
 
 _default_yaml_customizers: list[YamlCustomizer] = []
+
+
+def _container_children(value: Any) -> Iterator[Any] | None:
+    if isinstance(value, Mapping):
+        return (item for pair in value.items() for item in pair)
+    if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes, bytearray)):
+        return iter(value)
+    return None
+
+
+def _recursive_container_ids(value: Any) -> set[int]:
+    """Return container identities that require aliases to close a cycle."""
+    active: set[int] = set()
+    complete: set[int] = set()
+    recursive: set[int] = set()
+
+    def visit(candidate: Any) -> None:
+        children = _container_children(candidate)
+        if children is None:
+            return
+
+        candidate_id = id(candidate)
+        if candidate_id in active:
+            recursive.add(candidate_id)
+            return
+        if candidate_id in complete:
+            return
+
+        active.add(candidate_id)
+        for child in children:
+            visit(child)
+        active.remove(candidate_id)
+        complete.add(candidate_id)
+
+    visit(value)
+    return recursive
+
+
+def _configure_portable_aliases(yaml: YAML) -> None:
+    """Suppress identity-only aliases while retaining aliases required by cycles."""
+    representer = yaml.representer
+    base_represent = representer.represent
+    recursive_ids: set[int] = set()
+
+    def represent(data: Any) -> None:
+        recursive_ids.update(_recursive_container_ids(data))
+        try:
+            base_represent(data)
+        finally:
+            recursive_ids.clear()
+
+    def ignore_aliases(data: Any) -> bool:
+        return id(data) not in recursive_ids
+
+    representer.represent = represent
+    representer.ignore_aliases = ignore_aliases
 
 
 def add_default_yaml_customizer(customizer: YamlCustomizer):
@@ -62,9 +118,14 @@ def new_yaml(
 
     For input, `typ="safe"` is safest. For output, consider using `typ="rt"` for better
     control of string formatting (e.g. style of long strings).
+
+    Repeated references to the same acyclic container are expanded so output depends on
+    values rather than Python object identity. Recursive containers retain the aliases
+    required to represent the cycle.
     """
     yaml = YAML(typ=typ)
     yaml.default_flow_style = False  # Block style dictionaries.
+    _configure_portable_aliases(yaml)
 
     suppr = suppress_vals or (lambda v: False)
 

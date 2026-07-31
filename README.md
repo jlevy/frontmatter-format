@@ -233,6 +233,11 @@ changing frontmatter without reading an entire file.
 Both raw (string) parsed YAML frontmatter (using ruamel.yaml) are supported.
 For readability, there is also support for preferred sorting of YAML keys.
 
+The writer expands repeated references to the same acyclic Python container instead of
+emitting YAML anchors and aliases, so equal values serialize the same way regardless of
+object identity. Recursive containers still require YAML aliases and are therefore not
+portable to JSON-only consumers.
+
 ## Installation
 
 Use pip, poetry, or uv to add `frontmatter-format`.
