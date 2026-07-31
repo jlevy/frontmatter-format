@@ -3,6 +3,7 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+from ruamel.yaml.representer import RepresenterError
 
 from frontmatter_format import YamlSerializationError
 from frontmatter_format.key_sort import custom_key_sort
@@ -54,18 +55,35 @@ def test_low_level_writers_can_preserve_aliases(tmp_path: Path):
     expected = "&id001\nself: *id001\n"
 
     direct_stream = StringIO()
-    new_yaml(allow_aliases=True).dump(cyclic_value, direct_stream)
+    new_yaml(None, None, False, "rt", True).dump(cyclic_value, direct_stream)
 
     helper_stream = StringIO()
-    dump_yaml(cyclic_value, helper_stream, allow_aliases=True)
+    dump_yaml(cyclic_value, helper_stream, None, False, "rt", True)
 
     output_path = tmp_path / "cyclic.yml"
-    write_yaml_file(cyclic_value, output_path, allow_aliases=True)
+    write_yaml_file(cyclic_value, output_path, None, False, "rt", True)
 
     assert direct_stream.getvalue() == expected
     assert to_yaml_string(cyclic_value, None, False, "rt", True) == expected
     assert helper_stream.getvalue() == expected
     assert output_path.read_text(encoding="utf-8") == expected
+
+
+def test_serialization_error_preserves_ruamel_exception_compatibility():
+    assert issubclass(YamlSerializationError, RepresenterError)
+
+
+def test_reader_accepts_aliases_and_timestamps():
+    value = from_yaml_string(
+        "model_a: &model\n  base_case: 2.0\nmodel_b: *model\ncreated_at: 2024-01-02\n"
+    )
+
+    assert value == {
+        "model_a": {"base_case": 2.0},
+        "model_b": {"base_case": 2.0},
+        "created_at": date(2024, 1, 2),
+    }
+    assert value["model_a"] is value["model_b"]
 
 
 def test_timestamp_values_and_date_looking_strings_round_trip():

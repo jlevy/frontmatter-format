@@ -4,7 +4,7 @@
 
 **Author:** Joshua Levy and Codex
 
-**Status:** Approved
+**Status:** Implemented
 
 ## Overview
 
@@ -68,10 +68,9 @@ that active path indicates a genuine cycle and raises `YamlSerializationError` w
 actionable message. Encountering the same identity after its earlier representation has
 finished is ordinary sharing and remains valid.
 
-The active-path state must be cleared in `finally` blocks so one failed dump cannot
-contaminate a reused YAML instance. The guard belongs in the configured representer,
-not only in convenience wrappers, so direct `new_yaml().dump(...)` calls receive the
-same behavior.
+The active-path state must be cleared in `finally` blocks as representation unwinds.
+The guard belongs in the configured representer, not only in convenience wrappers, so
+direct `new_yaml().dump(...)` calls receive the same behavior.
 
 `allow_aliases=True` leaves ruamel.yaml's normal alias behavior intact. This is an
 explicit escape hatch for low-level YAML utility callers and supports cyclic graphs.
@@ -140,7 +139,7 @@ to write full YAML without transformation.
 - [x] Add frontmatter writer coverage for shared mapping metadata
 - [x] Document alias behavior, cycle behavior, and timestamp portability
 - [x] Change the introductory timestamp example to a quoted ISO string
-- [ ] Run formatting, linting, type checking, and the complete test suite
+- [x] Run formatting, linting, type checking, and the complete test suite
 
 ## Testing Strategy
 
@@ -155,6 +154,10 @@ to write full YAML without transformation.
 - Verify ISO date-looking strings are quoted and deserialize as strings
 - Verify `fmf_write` produces alias-free frontmatter and leaves raw YAML strings alone
 - Run `make` for the repository's full validation suite
+
+Validation completed on 2026-07-31. `make` passed with zero lint or type-check warnings
+and all 19 tests passed independently on every supported Python version from 3.10
+through 3.14.
 
 ## Rollout Plan
 
