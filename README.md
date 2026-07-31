@@ -251,9 +251,10 @@ Readers continue to accept YAML aliases and timestamps. This applies to reading 
 a document loaded with the round-trip loader (`typ="rt"`) has its authored anchors
 expanded when written back out, unless it is dumped with `allow_aliases=True`. Python
 `date` and `datetime` values are written as YAML timestamps so they retain their types
-when read back by this library. For consumers that do not implement YAML timestamp types consistently, pass
-explicitly formatted ISO 8601 strings instead. Alias-free output improves portability,
-but it does not restrict metadata to a JSON-compatible subset of YAML.
+when read back by this library. For consumers that do not implement YAML timestamp
+types consistently, pass explicitly formatted ISO 8601 strings instead. Alias-free
+output improves portability, but it does not restrict metadata to a JSON-compatible
+subset of YAML.
 
 ## Installation
 

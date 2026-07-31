@@ -156,7 +156,7 @@ to write full YAML without transformation.
 - Run `make` for the repository's full validation suite
 
 Validation completed on 2026-07-31. `make` passed with zero lint or type-check warnings
-and all 19 tests passed independently on every supported Python version from 3.10
+and all 21 tests passed independently on every supported Python version from 3.10
 through 3.14.
 
 ## Rollout Plan

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from frontmatter_format import YamlSerializationError
 from frontmatter_format.frontmatter_format import (
     FmFormatError,
     FmStyle,
@@ -195,6 +196,18 @@ def test_fmf_write_preserves_raw_yaml_aliases(tmp_path: Path):
     assert file_path.read_text(encoding="utf-8") == (
         "---\nmodel_a: &model\n  base_case: 2.0\nmodel_b: *model\n---\nBody\n"
     )
+
+
+def test_fmf_write_rejects_cycles_without_leaving_files(tmp_path: Path):
+    file_path = tmp_path / "cyclic-metadata.md"
+    cyclic_value: dict[str, object] = {}
+    cyclic_value["self"] = cyclic_value
+
+    with pytest.raises(YamlSerializationError, match=r"cyclic object graph"):
+        fmf_write(file_path, "Body\n", {"cyclic": cyclic_value})
+
+    assert not file_path.exists()
+    assert not Path(f"{file_path}.fmf.write.tmp").exists()
 
 
 def test_fmf_metadata(tmp_path: Path):
