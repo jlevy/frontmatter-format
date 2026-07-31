@@ -131,11 +131,11 @@ to write full YAML without transformation.
 
 ### Phase 1: Alias-Free Writing and Documentation
 
-- [ ] Add failing tests for shared dictionaries and lists under `typ="rt"` and
+- [x] Add failing tests for shared dictionaries and lists under `typ="rt"` and
   `typ="safe"`
-- [ ] Add failing tests for cycle errors and `allow_aliases=True`
-- [ ] Add timestamp and date-looking string regression tests
-- [ ] Implement the representer alias policy, active-path guard, error type, and output
+- [x] Add failing tests for cycle errors and `allow_aliases=True`
+- [x] Add timestamp and date-looking string regression tests
+- [x] Implement the representer alias policy, active-path guard, error type, and output
   helper parameters
 - [ ] Add frontmatter writer coverage for shared mapping metadata
 - [ ] Document alias behavior, cycle behavior, and timestamp portability

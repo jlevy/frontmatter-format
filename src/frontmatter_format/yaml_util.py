@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal, TextIO
 
 from ruamel.yaml import YAML, Representer
+from ruamel.yaml.representer import RepresenterError
 
 from .key_sort import KeySort
 
@@ -23,6 +24,10 @@ Valid values for ruamel.yaml YAML() typ parameter:
 - "full": Full dumper including Python built-ins (potentially unsafe)
 - "base": Base loader only
 """
+
+
+class YamlSerializationError(RepresenterError):
+    """Raised when a Python object graph cannot be serialized as configured."""
 
 
 def none_or_empty_dict(val: Any) -> bool:
@@ -53,6 +58,7 @@ def new_yaml(
     suppress_vals: Callable[[Any], bool] | None = none_or_empty_dict,
     stringify_unknown: bool = False,
     typ: YamlTyp = "safe",
+    allow_aliases: bool = False,
 ) -> YAML:
     """
     Configure a new YAML instance with custom settings.
@@ -62,6 +68,9 @@ def new_yaml(
 
     For input, `typ="safe"` is safest. For output, consider using `typ="rt"` for better
     control of string formatting (e.g. style of long strings).
+
+    Aliases are disabled by default so output is independent of shared Python object
+    identity. Set `allow_aliases=True` to preserve aliases or serialize cyclic graphs.
     """
     yaml = YAML(typ=typ)
     yaml.default_flow_style = False  # Block style dictionaries.
@@ -97,6 +106,28 @@ def new_yaml(
     if key_sort:
         yaml.representer.sort_base_mapping_type_on_output = False
 
+    if not allow_aliases:
+        representer = yaml.representer
+        original_represent_data = representer.represent_data
+        active_object_ids: set[int] = set()
+
+        def represent_data(data: Any) -> Any:
+            object_id = id(data)
+            if object_id in active_object_ids:
+                raise YamlSerializationError(
+                    "Cannot serialize a cyclic object graph with aliases disabled; "
+                    + "use allow_aliases=True in a low-level YAML writer if aliases are intentional."
+                )
+
+            active_object_ids.add(object_id)
+            try:
+                return original_represent_data(data)
+            finally:
+                active_object_ids.remove(object_id)
+
+        representer.ignore_aliases = lambda *_args: True
+        representer.represent_data = represent_data
+
     return yaml
 
 
@@ -120,12 +151,18 @@ def to_yaml_string(
     key_sort: KeySort[str] | None = None,
     stringify_unknown: bool = False,
     typ: YamlTyp = "rt",
+    allow_aliases: bool = False,
 ) -> str:
     """
     Convert a Python object to a YAML string.
     """
     stream = StringIO()
-    new_yaml(key_sort=key_sort, stringify_unknown=stringify_unknown, typ=typ).dump(value, stream)
+    new_yaml(
+        key_sort=key_sort,
+        stringify_unknown=stringify_unknown,
+        typ=typ,
+        allow_aliases=allow_aliases,
+    ).dump(value, stream)
     return stream.getvalue()
 
 
@@ -135,11 +172,17 @@ def dump_yaml(
     key_sort: KeySort[str] | None = None,
     stringify_unknown: bool = False,
     typ: YamlTyp = "rt",
-):
+    allow_aliases: bool = False,
+) -> None:
     """
     Write a Python object to a YAML stream.
     """
-    new_yaml(key_sort=key_sort, stringify_unknown=stringify_unknown, typ=typ).dump(value, stream)
+    new_yaml(
+        key_sort=key_sort,
+        stringify_unknown=stringify_unknown,
+        typ=typ,
+        allow_aliases=allow_aliases,
+    ).dump(value, stream)
 
 
 def write_yaml_file(
@@ -148,7 +191,8 @@ def write_yaml_file(
     key_sort: KeySort[str] | None = None,
     stringify_unknown: bool = False,
     typ: YamlTyp = "rt",
-):
+    allow_aliases: bool = False,
+) -> None:
     """
     Write the given value to the YAML file, creating it atomically.
     """
@@ -156,10 +200,16 @@ def write_yaml_file(
     temp_path = path.with_suffix(".yml.tmp")
     try:
         temp_path.write_text(
-            to_yaml_string(value, key_sort, stringify_unknown=stringify_unknown, typ=typ),
+            to_yaml_string(
+                value,
+                key_sort,
+                stringify_unknown=stringify_unknown,
+                typ=typ,
+                allow_aliases=allow_aliases,
+            ),
             encoding="utf-8",
         )
         temp_path.replace(path)
-    except Exception as e:
+    except Exception:
         temp_path.unlink(missing_ok=True)
-        raise e
+        raise
