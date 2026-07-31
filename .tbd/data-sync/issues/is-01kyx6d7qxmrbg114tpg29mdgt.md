@@ -5,13 +5,13 @@ title: Validate compatibility and prepare deterministic YAML change for release
 kind: task
 status: closed
 priority: 2
-version: 2
+version: 4
 spec_path: docs/project/specs/active/plan-2026-07-31-deterministic-yaml-output.md
 labels: []
 dependencies: []
 parent_id: is-01kyx6cjm1tg2b1rs0416a0y8v
 created_at: 2026-07-31T22:58:35.388Z
-updated_at: 2026-07-31T23:51:53.741Z
+updated_at: 2026-07-31T23:51:55.385Z
 closed_at: 2026-07-31T23:51:53.740Z
 close_reason: "PR #6 independently reviewed at 843351f: no open findings; full lint/type/test/build gates and custom cycle/atomicity/API probes pass; GitHub CI is green; PR #5 is closed as superseded."
 ---
