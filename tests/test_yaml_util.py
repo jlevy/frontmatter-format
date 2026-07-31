@@ -54,6 +54,8 @@ def test_low_level_writers_can_preserve_aliases(tmp_path: Path):
     cyclic_value["self"] = cyclic_value
     expected = "&id001\nself: *id001\n"
 
+    # Positional calls are deliberate: they verify allow_aliases was appended
+    # after typ rather than inserted before existing parameters.
     direct_stream = StringIO()
     new_yaml(None, None, False, "rt", True).dump(cyclic_value, direct_stream)
 
@@ -67,6 +69,20 @@ def test_low_level_writers_can_preserve_aliases(tmp_path: Path):
     assert to_yaml_string(cyclic_value, None, False, "rt", True) == expected
     assert helper_stream.getvalue() == expected
     assert output_path.read_text(encoding="utf-8") == expected
+
+
+def test_round_trip_load_expands_authored_anchors_unless_allowed():
+    source = "a: &x\n  m: 7\nb: *x\n"
+
+    default_yaml = new_yaml(typ="rt")
+    expanded = StringIO()
+    default_yaml.dump(default_yaml.load(source), expanded)
+    assert expanded.getvalue() == "a:\n  m: 7\nb:\n  m: 7\n"
+
+    preserving_yaml = new_yaml(typ="rt", allow_aliases=True)
+    preserved = StringIO()
+    preserving_yaml.dump(preserving_yaml.load(source), preserved)
+    assert preserved.getvalue() == source
 
 
 def test_serialization_error_preserves_ruamel_exception_compatibility():
