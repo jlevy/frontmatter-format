@@ -137,9 +137,9 @@ to write full YAML without transformation.
 - [x] Add timestamp and date-looking string regression tests
 - [x] Implement the representer alias policy, active-path guard, error type, and output
   helper parameters
-- [ ] Add frontmatter writer coverage for shared mapping metadata
-- [ ] Document alias behavior, cycle behavior, and timestamp portability
-- [ ] Change the introductory timestamp example to a quoted ISO string
+- [x] Add frontmatter writer coverage for shared mapping metadata
+- [x] Document alias behavior, cycle behavior, and timestamp portability
+- [x] Change the introductory timestamp example to a quoted ISO string
 - [ ] Run formatting, linting, type checking, and the complete test suite
 
 ## Testing Strategy

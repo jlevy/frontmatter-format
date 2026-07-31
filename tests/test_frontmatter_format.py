@@ -174,6 +174,29 @@ def test_fmf_with_custom_key_sort(tmp_path: Path):
     assert lines[3].strip() == "author: Test Author"
 
 
+def test_fmf_write_expands_shared_mapping_metadata(tmp_path: Path):
+    file_path = tmp_path / "shared-metadata.md"
+    shared_value = {"base_case": 2.0}
+    metadata = {"model_a": shared_value, "model_b": shared_value}
+
+    fmf_write(file_path, "Body\n", metadata)
+
+    assert file_path.read_text(encoding="utf-8") == (
+        "---\nmodel_a:\n  base_case: 2.0\nmodel_b:\n  base_case: 2.0\n---\nBody\n"
+    )
+
+
+def test_fmf_write_preserves_raw_yaml_aliases(tmp_path: Path):
+    file_path = tmp_path / "raw-alias.md"
+    raw_metadata = "model_a: &model\n  base_case: 2.0\nmodel_b: *model"
+
+    fmf_write(file_path, "Body\n", raw_metadata)
+
+    assert file_path.read_text(encoding="utf-8") == (
+        "---\nmodel_a: &model\n  base_case: 2.0\nmodel_b: *model\n---\nBody\n"
+    )
+
+
 def test_fmf_metadata(tmp_path: Path):
     # Test offsets.
     file_path = tmp_path / "test_offset.md"
