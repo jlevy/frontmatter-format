@@ -14,6 +14,15 @@ on:
 permissions:
   contents: read
 
+env:
+  # Supply-chain cool-off: only consider releases older than this, so CI never
+  # resolves packages too new to have been vetted. uv (>= 0.9, and the version
+  # pinned below) accepts a relative duration directly. See the Supply Chain
+  # Hardening section in docs/development.md.
+  UV_EXCLUDE_NEWER: "14 days"
+  # Keep machine-level uv configuration out of the reviewed project graph.
+  UV_NO_CONFIG: "1"
+
 jobs:
   build:
     strategy:
@@ -31,16 +40,23 @@ jobs:
       # https://docs.astral.sh/uv/guides/integration/github/
 
       - name: Checkout (official GitHub action)
-        uses: actions/checkout@v6
+        # Pinned to a full commit SHA (see supply-chain notes in
+        # docs/development.md); bump deliberately when updating.
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # Important for versioning plugins:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install uv (official Astral action)
-        uses: astral-sh/setup-uv@v7
+        # Pinned to a full commit SHA. Bump the action, uv version, and Linux
+        # checksum together when updating.
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           # Update this as needed:
-          version: "0.10.2"
+          version: "0.11.25"
+          # uv-x86_64-unknown-linux-gnu; update for another matrix OS/arch.
+          checksum: "1db18b5e76fa645a7f3865773139bdec8e2d46adbdbb35e7410b34fa8015ccd2"
           enable-cache: true
           python-version: ${{ matrix.python-version }}
 
@@ -48,16 +64,43 @@ jobs:
         run: uv python install
 
       # Alternately can use the official Python action:
+      # Pin a reviewed full commit SHA before enabling it.
       # - name: Set up Python (using actions/setup-python)
-      #   uses: actions/setup-python@v5
+      #   uses: actions/setup-python@FULL_COMMIT_SHA # reviewed version
       #   with:
       #     python-version: ${{ matrix.python-version }}
 
+      - name: Verify lockfile
+        run: uv lock --check
+
       - name: Install all dependencies
-        run: uv sync --all-extras
+        # --frozen: install exactly from the committed uv.lock, never re-resolving
+        # (UV_EXCLUDE_NEWER, set above, governs any resolution that does happen).
+        run: uv sync --all-extras --all-groups --frozen
 
       - name: Run linting
-        run: uv run python devtools/lint.py
+        # Check-only mode so CI fails on unformatted code instead of fixing it.
+        run: uv run --frozen python devtools/lint.py --check
+
+      - name: Verify linting did not modify tracked files
+        run: git diff --exit-code
 
       - name: Run tests
-        run: uv run pytest
+        run: uv run --frozen pytest
+
+      - name: Build release artifacts
+        if: matrix.python-version == '3.12'
+        run: uv build --no-build-isolation
+
+      - name: Validate release artifacts
+        if: matrix.python-version == '3.12'
+        run: uv run --frozen python devtools/check_dist.py dist
+
+      - name: Smoke-test artifact installation
+        if: matrix.python-version == '3.12'
+        shell: bash
+        run: |
+          for artifact in dist/*.whl dist/*.tar.gz; do
+            uv run --isolated --no-project --with "${artifact}" \
+              python -c "import frontmatter_format"
+          done
