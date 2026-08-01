@@ -48,13 +48,17 @@ dependencies = [
 # ---- Dev dependencies ----
 
 [dependency-groups]
+build = [
+    "hatchling==1.30.1",
+    "uv-dynamic-versioning==0.14.0",
+]
 dev = [
-    "pytest>=9.0.2",
+    "pytest>=9.1.1",
     "pytest-sugar>=1.1.1",
-    "ruff>=0.15.1",
-    "codespell>=2.4.1",
-    "rich>=14.3.2",
-    "basedpyright>=1.38.0",
+    "ruff>=0.15.20",
+    "codespell>=2.4.2",
+    "rich>=15.0.0",
+    "basedpyright>=1.39.9",
     "funlog>=0.2.1",
 ]
 
@@ -69,7 +73,7 @@ dev = [
 # https://github.com/ninoseki/uv-dynamic-versioning/
 
 [build-system]
-requires = ["hatchling", "uv-dynamic-versioning"]
+requires = ["hatchling==1.30.1", "uv-dynamic-versioning==0.14.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
@@ -87,8 +91,28 @@ bump = true
 # The source location for the package.
 packages = ["src/frontmatter_format"]
 
+[tool.hatch.build.targets.sdist]
+# Keep the published source archive limited to files needed to inspect and rebuild the
+# package. In particular, do not publish repository automation, agent state, or
+# arbitrary untracked files. Hatch also adds the root .gitignore as standard source
+# metadata.
+only-include = [
+    "src",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+
 
 # ---- Settings ----
+
+[tool.uv]
+# Fail fast on old uv versions rather than misbehave. 0.9 is the floor where
+# exclude-newer accepts a relative duration like "14 days".
+required-version = ">=0.9"
+# Safe project-level default for every uv command. CI and the Makefile repeat it so
+# copied commands and tool execution outside project discovery retain the same policy.
+exclude-newer = "14 days"
 
 [tool.ruff]
 # Set as desired, typically 88 (black standard) or 100 (wide).
@@ -160,6 +184,7 @@ reportUnknownVariableType = false
 # skip = "foo.py,bar.py"
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 python_files = ["*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]

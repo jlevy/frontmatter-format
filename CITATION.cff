@@ -7,7 +7,6 @@ authors:
   - family-names: Levy
     given-names: Joshua
 repository-code: "https://github.com/jlevy/frontmatter-format"
-date-released: 2024-10-25
 abstract: >-
   Frontmatter format is a way to add metadata as frontmatter on any file.
   It is a simple set of conventions to put structured metadata as YAML

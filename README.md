@@ -111,7 +111,7 @@ Here’s an example of a richer metadata in use, from a tool that does video
 transcription. You can see how it’s useful having a simple and clear format for title,
 description, history, source of the content, etc.
 
-![Credit for video to @KBoges on YouTube](images/example.png)
+![Credit for video to @KBoges on YouTube](https://raw.githubusercontent.com/jlevy/frontmatter-format/main/images/example.png)
 
 ## Advantages of this Approach
 
@@ -134,7 +134,7 @@ description, history, source of the content, etc.
 ## Format Definition
 
 Frontmatter is read as a text file, one line at a time, using standard text line reading
-and UTF8 encoding.
+and UTF-8 encoding.
 
 A file is in frontmatter format if the first characters are one of the following:
 
@@ -216,9 +216,10 @@ Rules:
   allowed. For example, for hash style, this means there must be two hashes (`# #` or
   `##`) at the start of a comment line, within the delimiters.
 
-- There is no restriction on the content of the file after the frontmatter.
+- There is no restriction on the text after the frontmatter.
   It may even contain other content in frontmatter format, but this will not be parsed
-  as frontmatter. Typically, it is text, but it could be binary as well.
+  as frontmatter. The Python reference implementation reads and writes UTF-8 text; it
+  does not preserve arbitrary binary data.
 
 - Frontmatter is optional.
   This means almost any text file can be read as frontmatter format.
@@ -259,7 +260,11 @@ JSON-compatible subset of YAML.
 
 ## Installation
 
-Use pip, poetry, or uv to add `frontmatter-format`.
+Install `frontmatter-format` from PyPI with your preferred Python package manager:
+
+```shell
+uv add frontmatter-format
+```
 
 ## Usage
 
@@ -384,12 +389,12 @@ print(metadata_start_offset)  # File position where the opening delimiter starts
 
 - **Is this mature?** This is pretty new.
   But I’ve been using this format and package on my own projects successfully.
-  The flexibity of just having metadata on all your text files has been great for
+  The flexibility of just having metadata on all your text files has been great for
   workflows, pipelines, etc.
 
 - **When should we use it?** All the time if you can!
   It’s especially important for command-line tools, AI agents, LLM workflows, since you
-  often want to store extra metadata is a consistent way on text inputs of various
+  often want to store extra metadata in a consistent way on text inputs of various
   formats like Markdown, HTML, CSS, and Python.
 
 - **Does this specify the format of the YAML itself?** No.
@@ -416,9 +421,9 @@ print(metadata_start_offset)  # File position where the opening delimiter starts
   For HTML and code, it works basically with no changes at all since the frontmatter is
   considered a comment.
 
-- **Can this work with binary files?** No reason why not, if it makes sense for you!
-  You can use `fmf_insert_frontmatter()` to add metadata of any style to any file.
-  Whether this works for your application depends on the file format.
+- **Can this work with binary files?** The format can be adapted to a binary container,
+  but the Python reference implementation operates on UTF-8 text files.
+  Do not use its file helpers when arbitrary binary bytes must be preserved.
 
 - **Does this work for CSV files?** Sort of.
   Some tools do properly honor hash style comments when parsing CSV files.
@@ -447,3 +452,7 @@ For instructions on publishing to PyPI, see [publishing.md](docs/publishing.md).
 
 *This project was built from
 [simple-modern-uv](https://github.com/jlevy/simple-modern-uv).*
+
+<!-- This document follows common-doc-guidelines.md.
+See github.com/jlevy/practical-prose and review guidelines before editing.
+-->
