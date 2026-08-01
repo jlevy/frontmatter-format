@@ -14,6 +14,7 @@ from .frontmatter_format import (
 )
 from .key_sort import KeySort, custom_key_sort
 from .yaml_util import (
+    YamlSerializationError,
     YamlTyp,
     add_default_yaml_customizer,
     add_default_yaml_representer,
@@ -40,6 +41,7 @@ __all__ = [
     "Metadata",
     "KeySort",
     "YamlTyp",
+    "YamlSerializationError",
     "add_default_yaml_customizer",
     "add_default_yaml_representer",
     "dump_yaml",

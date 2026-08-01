@@ -48,7 +48,7 @@ Some simple examples:
 ---
 title: Sample Markdown File
 state: draft
-created_at: 2022-08-07 00:00:00
+created_at: "2022-08-07T00:00:00Z"
 tags:
   - yaml
   - examples
@@ -230,8 +230,31 @@ It auto-detects all the frontmatter styles above.
 It supports reading small files easily into memory, but also allows extracting or
 changing frontmatter without reading an entire file.
 
-Both raw (string) parsed YAML frontmatter (using ruamel.yaml) are supported.
+Both raw (string) and parsed YAML frontmatter (using ruamel.yaml) are supported.
 For readability, there is also support for preferred sorting of YAML keys.
+
+### YAML Output and Portability
+
+When `fmf_write` receives metadata as a mapping, repeated Python dictionaries and lists
+are expanded in place. The generated frontmatter therefore contains no automatic YAML
+anchors or aliases and does not vary based on whether the input reused a container
+instance.
+
+A cyclic metadata object graph cannot be expanded safely, so mapping-based writes raise
+`YamlSerializationError` with an actionable message. Low-level YAML utilities
+(`new_yaml`, `to_yaml_string`, `dump_yaml`, and `write_yaml_file`) accept
+`allow_aliases=True` when anchors, aliases, or cyclic graphs are intentional.
+`fmf_write` deliberately does not expose that option; pass a raw YAML string to write
+intentionally authored aliases without parsing or reserializing them.
+
+Readers continue to accept YAML aliases and timestamps. This applies to reading only:
+a document loaded with the round-trip loader (`typ="rt"`) has its authored anchors
+expanded when written back out, unless it is dumped with `allow_aliases=True`. Python
+`date` and `datetime` values are written as YAML timestamps so they retain their types
+when read back by this library. For consumers that do not implement YAML timestamp
+types consistently, pass explicitly formatted ISO 8601 strings instead. Alias-free
+output improves portability, but it does not restrict metadata to a JSON-compatible
+subset of YAML.
 
 ## Installation
 
