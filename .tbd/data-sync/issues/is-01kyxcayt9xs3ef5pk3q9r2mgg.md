@@ -3,15 +3,17 @@ type: is
 id: is-01kyxcayt9xs3ef5pk3q9r2mgg
 title: Harden CI and PyPI publishing for v0.4.0
 kind: task
-status: open
+status: closed
 priority: 1
-version: 2
+version: 4
 labels: []
 dependencies:
   - type: blocks
     target: is-01kyxcb78kscjyy123r2k1kb8b
 parent_id: is-01kyxcakkwcfhqxpvqf258c9a1
 created_at: 2026-08-01T00:42:12.168Z
-updated_at: 2026-08-01T00:42:20.818Z
+updated_at: 2026-08-01T01:11:16.222Z
+closed_at: 2026-08-01T01:11:16.221Z
+close_reason: Implemented and locally validated the v0.4.0 workflow hardening, release documentation, and strict source-distribution cleanup.
 ---
 Use frozen installs and UV_EXCLUDE_NEWER, make lint checks non-mutating, prevent untagged workflow_dispatch publishing, validate installed artifacts, constrain build dependencies, SHA-pin actions, and establish a protected release gate.
