@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from frontmatter_format import YamlSerializationError
+from frontmatter_format import YamlSerializationError, fmf_split_frontmatter
 from frontmatter_format.frontmatter_format import (
     FmFormatError,
     FmStyle,
@@ -10,7 +10,6 @@ from frontmatter_format.frontmatter_format import (
     fmf_read,
     fmf_read_frontmatter,
     fmf_read_frontmatter_raw,
-    fmf_split_frontmatter,
     fmf_strip_frontmatter,
     fmf_write,
 )
@@ -388,8 +387,84 @@ def test_fmf_split_frontmatter_unclosed_delimiter():
     assert fmf_split_frontmatter(unclosed, strict=False) == (None, 0, 0)
 
 
-def test_fmf_split_frontmatter_html_style():
-    content = "<!---\ntitle: H\n--->\nbody\n"
-    metadata_str, content_offset, _ = fmf_split_frontmatter(content)
-    assert metadata_str == "title: H\n"
+@pytest.mark.parametrize("style", list(FmStyle))
+def test_fmf_split_frontmatter_supports_every_style(style: FmStyle):
+    metadata_line = f"{style.prefix}title: All styles\n"
+    frontmatter = f"{style.start}\n{metadata_line}{style.end}\n"
+    content = f"{frontmatter}body\n"
+
+    metadata_str, content_offset, metadata_start = fmf_split_frontmatter(content)
+
+    assert metadata_str == "title: All styles\n"
+    assert metadata_start == 0
+    assert content[:content_offset] == frontmatter
     assert content[content_offset:] == "body\n"
+
+
+@pytest.mark.parametrize(
+    "newline",
+    ["\n", "\r\n", "\r"],
+    ids=["LF", "CRLF", "CR"],
+)
+def test_fmf_split_frontmatter_preserves_metadata_newlines(newline: str):
+    metadata = f"title: Original newlines{newline}"
+    frontmatter = f"---{newline}{metadata}---{newline}"
+    content = f"{frontmatter}body{newline}"
+
+    metadata_str, content_offset, metadata_start = fmf_split_frontmatter(content)
+
+    assert metadata_str == metadata
+    assert metadata_start == 0
+    assert content[:content_offset] == frontmatter
+    assert content[content_offset:] == f"body{newline}"
+
+
+def test_fmf_split_frontmatter_preserves_crlf_that_file_reader_normalizes(tmp_path: Path):
+    content = "---\r\ntitle: Original newlines\r\n---\r\nbody\r\n"
+    file_path = tmp_path / "crlf.md"
+    file_path.write_bytes(content.encode("utf-8"))
+
+    string_metadata, string_offset, _ = fmf_split_frontmatter(content)
+    file_metadata, file_offset, _ = fmf_read_frontmatter_raw(file_path)
+
+    assert string_metadata == "title: Original newlines\r\n"
+    assert content[string_offset:] == "body\r\n"
+    assert file_metadata == "title: Original newlines\n"
+    with open(file_path, encoding="utf-8") as stream:
+        stream.seek(file_offset)
+        assert stream.read() == "body\n"
+
+
+def test_fmf_split_frontmatter_hash_preamble_offsets():
+    preamble = "#!/usr/bin/env python\r\n# Script metadata follows\r\n"
+    frontmatter = "#---\r\n# title: Hash preamble\r\n#---\r\n"
+    content = f"{preamble}{frontmatter}print('body')\r\n"
+
+    metadata_str, content_offset, metadata_start = fmf_split_frontmatter(content)
+
+    assert metadata_str == "title: Hash preamble\r\n"
+    assert metadata_start == len(preamble)
+    assert content[:metadata_start] == preamble
+    assert content[metadata_start:content_offset] == frontmatter
+    assert content[content_offset:] == "print('body')\r\n"
+
+
+def test_fmf_split_frontmatter_closing_delimiter_without_newline():
+    content = "---\ntitle: No body\n---"
+
+    metadata_str, content_offset, metadata_start = fmf_split_frontmatter(content)
+
+    assert metadata_str == "title: No body\n"
+    assert content_offset == len(content)
+    assert metadata_start == 0
+    assert content[:content_offset] == content
+    assert content[content_offset:] == ""
+
+
+@pytest.mark.parametrize(
+    "separator", ["\u2028", "\u2029", "\u0085", "\v", "\f", "\x1c", "\x1d", "\x1e"]
+)
+def test_fmf_split_frontmatter_rejects_non_format_line_separators(separator: str):
+    content = f"---{separator}title: Not frontmatter{separator}---{separator}body"
+
+    assert fmf_split_frontmatter(content) == (None, 0, 0)
