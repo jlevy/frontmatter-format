@@ -236,25 +236,26 @@ For readability, there is also support for preferred sorting of YAML keys.
 ### YAML Output and Portability
 
 When `fmf_write` receives metadata as a mapping, repeated Python dictionaries and lists
-are expanded in place. The generated frontmatter therefore contains no automatic YAML
-anchors or aliases and does not vary based on whether the input reused a container
-instance.
+are expanded in place.
+The generated frontmatter therefore contains no automatic YAML anchors or aliases and
+does not vary based on whether the input reused a container instance.
 
 A cyclic metadata object graph cannot be expanded safely, so mapping-based writes raise
-`YamlSerializationError` with an actionable message. Low-level YAML utilities
-(`new_yaml`, `to_yaml_string`, `dump_yaml`, and `write_yaml_file`) accept
-`allow_aliases=True` when anchors, aliases, or cyclic graphs are intentional.
-`fmf_write` deliberately does not expose that option; pass a raw YAML string to write
-intentionally authored aliases without parsing or reserializing them.
+`YamlSerializationError` with an actionable message.
+Low-level YAML utilities (`new_yaml`, `to_yaml_string`, `dump_yaml`, and
+`write_yaml_file`) accept `allow_aliases=True` when anchors, aliases, or cyclic graphs
+are intentional. `fmf_write` deliberately does not expose that option; pass a raw YAML
+string to write intentionally authored aliases without parsing or reserializing them.
 
-Readers continue to accept YAML aliases and timestamps. This applies to reading only:
-a document loaded with the round-trip loader (`typ="rt"`) has its authored anchors
-expanded when written back out, unless it is dumped with `allow_aliases=True`. Python
-`date` and `datetime` values are written as YAML timestamps so they retain their types
-when read back by this library. For consumers that do not implement YAML timestamp
-types consistently, pass explicitly formatted ISO 8601 strings instead. Alias-free
-output improves portability, but it does not restrict metadata to a JSON-compatible
-subset of YAML.
+Readers continue to accept YAML aliases and timestamps.
+This applies to reading only: a document loaded with the round-trip loader (`typ="rt"`)
+has its authored anchors expanded when written back out, unless it is dumped with
+`allow_aliases=True`. Python `date` and `datetime` values are written as YAML timestamps
+so they retain their types when read back by this library.
+For consumers that do not implement YAML timestamp types consistently, pass explicitly
+formatted ISO 8601 strings instead.
+Alias-free output improves portability, but it does not restrict metadata to a
+JSON-compatible subset of YAML.
 
 ## Installation
 
@@ -300,7 +301,7 @@ Examples with more formats:
 # Write in any other desired style:
 html_content = "<p>Hello, World!</p>"
 title_first_sort = custom_key_sort(["title", "author"])
-fmf_write("example.html", content, metadata, style=FmStyle.html, key_sort=title_first_sort)
+fmf_write("example.html", html_content, metadata, style=FmStyle.html, key_sort=title_first_sort)
 ```
 
 The file then contains:
@@ -321,6 +322,35 @@ content, raw_metadata = fmf_read_raw("example.md")
 print(repr(raw_metadata))  # 'author: Test Author\ntitle: Test Title\n'
 ```
 
+### Splitting In-Memory Text
+
+Use `fmf_split_frontmatter` when the document is already a string.
+It returns the raw metadata plus character offsets that can slice the original string
+exactly:
+
+```python
+from frontmatter_format import fmf_split_frontmatter
+
+document = "---\r\ntitle: In memory\r\n---\r\nBody\r\n"
+raw_metadata, content_offset, metadata_start_offset = fmf_split_frontmatter(document)
+
+assert raw_metadata == "title: In memory\r\n"
+assert metadata_start_offset == 0
+assert document[content_offset:] == "Body\r\n"
+```
+
+The string API recognizes LF, CRLF, and CR line endings and preserves them in the raw
+metadata. Its offsets count Unicode code points.
+File-reading offsets instead support file seeking, and the file API normalizes line
+endings through Python’s universal newline handling.
+
+An opening delimiter without a closing delimiter raises `FmFormatError` by default.
+Use `strict=False` when a bare opening delimiter should be treated as ordinary content:
+
+```python
+assert fmf_split_frontmatter("---\nMarkdown thematic break", strict=False) == (None, 0, 0)
+```
+
 The above is easiest for small files, but you can also operate more efficiently directly
 on files, without reading the file contents into memory.
 
@@ -334,12 +364,15 @@ fmf_strip_frontmatter("example.md")
 new_metadata = {"title": "New Title", "author": "New Author"}
 fmf_insert_frontmatter("example.md", new_metadata, fm_style=FmStyle.yaml)
 
-# Read the raw frontmatter metadata and get the offset for the rest of the content:
-metadata, offset = fmf_read_frontmatter("example.md")
+# Read and parse only the frontmatter metadata:
+metadata = fmf_read_frontmatter("example.md")
 print(metadata)  # {'title': 'Test Title', 'author': 'Test Author'}
-print(offset)  # The byte offset where the content starts
-raw_metadata, offset = fmf_read_frontmatter_raw("example.md")
+
+# Read raw metadata and the file offsets for the body and opening delimiter:
+raw_metadata, content_offset, metadata_start_offset = fmf_read_frontmatter_raw("example.md")
 print(raw_metadata)  # 'title: Test Title\nauthor: Test Author\n'
+print(content_offset)  # File position where the body starts
+print(metadata_start_offset)  # File position where the opening delimiter starts
 ```
 
 ## FAQ
