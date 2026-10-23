@@ -1,13 +1,16 @@
 from datetime import date, datetime, timezone
 from io import StringIO
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
+from ruamel.yaml import YAML
 from ruamel.yaml.representer import RepresenterError
 
 from frontmatter_format import YamlSerializationError
 from frontmatter_format.key_sort import custom_key_sort
 from frontmatter_format.yaml_util import (
+    YamlTyp,
     dump_yaml,
     from_yaml_string,
     new_yaml,
@@ -154,3 +157,85 @@ def test_write_yaml_file_with_suppress_vals(tmp_path: Path):
     assert read_data["author"] == "Test Author"
     assert read_data["date"] == "2022-01-01"
     assert read_data["content"] == "Some content"
+
+
+def _dump(yaml: YAML, value: object) -> str:
+    stream = StringIO()
+    yaml.dump(value, stream)
+    return stream.getvalue()
+
+
+@pytest.mark.parametrize("typ", ["rt", "safe"])
+def test_a_later_instance_does_not_change_an_earlier_instances_output(typ: YamlTyp):
+    """Each instance keeps its own representers; building another one cannot rewrite them."""
+    keep_everything = new_yaml(suppress_vals=lambda _value: False, typ=typ)
+    value: dict[str, Any] = {"kept_null": None, "kept_empty": {}, "text": "x"}
+    before = _dump(keep_everything, value)
+    new_yaml(typ=typ)  # Default policy: drops None and {}.
+    assert _dump(keep_everything, value) == before
+    assert "kept_null: null" in before and "kept_empty: {}" in before
+
+
+def test_a_later_instance_does_not_change_an_earlier_instances_key_order():
+    reversed_keys = new_yaml(key_sort=lambda key: tuple(-ord(c) for c in key), typ="rt")
+    value = {"a": 1, "b": 2, "c": 3}
+    before = _dump(reversed_keys, value)
+    new_yaml(typ="rt")
+    assert _dump(reversed_keys, value) == before
+    assert before.splitlines() == ["c: 3", "b: 2", "a: 1"]
+
+
+def test_new_yaml_leaves_ruamels_shared_representer_tables_unchanged():
+    from ruamel.yaml.representer import RoundTripRepresenter, SafeRepresenter
+
+    def table(cls: type) -> dict[Any, Any]:
+        return dict(cast(dict[Any, Any], cls.yaml_representers))
+
+    tables = {cls: table(cls) for cls in (RoundTripRepresenter, SafeRepresenter)}
+    for typ in ("rt", "safe"):
+        new_yaml(suppress_vals=lambda _value: False, typ=typ, stringify_unknown=True)
+        new_yaml(typ=typ)
+    assert {cls: table(cls) for cls in tables} == tables
+
+
+def test_concurrent_instances_with_different_policies_write_their_own_bytes():
+    """A dump on one thread is unaffected by instances other threads build meanwhile."""
+    import threading
+
+    value: dict[str, Any] = {f"k{i}": {"null": None, "empty": {}, "n": i} for i in range(3000)}
+    expected = _dump(new_yaml(suppress_vals=lambda _value: False, typ="rt"), value)
+    stop = threading.Event()
+
+    def churn() -> None:
+        while not stop.is_set():
+            new_yaml(typ="rt")
+
+    threads = [threading.Thread(target=churn) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    try:
+        outputs = [
+            _dump(new_yaml(suppress_vals=lambda _value: False, typ="rt"), value) for _ in range(4)
+        ]
+    finally:
+        stop.set()
+        for thread in threads:
+            thread.join()
+    assert all(output == expected for output in outputs)
+
+
+def test_default_representers_still_apply_to_every_new_instance(monkeypatch: pytest.MonkeyPatch):
+    from frontmatter_format import yaml_util
+
+    class Point:
+        x: int
+
+        def __init__(self, x: int):
+            self.x = x
+
+    monkeypatch.setattr(yaml_util, "_default_yaml_customizers", [])
+    yaml_util.add_default_yaml_representer(
+        Point, lambda dumper, point: dumper.represent_scalar("tag:yaml.org,2002:str", f"p{point.x}")
+    )
+    for typ in ("rt", "safe"):
+        assert _dump(new_yaml(typ=typ), {"at": Point(3)}) == "at: p3\n"

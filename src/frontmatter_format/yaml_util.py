@@ -73,6 +73,11 @@ def new_yaml(
     identity. Set `allow_aliases=True` to preserve aliases or serialize cyclic graphs.
     """
     yaml = YAML(typ=typ)
+    # ruamel's `add_representer` is a classmethod on the representer class every instance
+    # of a `typ` shares, so registering this instance's representers there would rewrite
+    # every other instance's output, including mid-dump on another thread. A private
+    # subclass keeps them with this instance; ruamel builds the representer from it lazily.
+    yaml.Representer = type(yaml.Representer.__name__, (yaml.Representer,), {})
     yaml.default_flow_style = False  # Block style dictionaries.
 
     suppr = suppress_vals or (lambda v: False)
