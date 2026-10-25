@@ -27,11 +27,12 @@ then spent on mutations of them (a count of zero checks only the files). The uni
 `tests/test_c_parser.py` run a small deterministic corpus of the same kind on every CI run;
 this script is the larger search behind them.
 
-Pairs this search has been run on with no divergence: ruamel.yaml 0.19.1 with
-ruamel.yaml.clib 0.2.15 (CPython 3.10 and 3.13, Linux) and ruamel.yaml 0.18.10 with
-ruamel.yaml.clib 0.2.15 (CPython 3.12, Linux). Both report libyaml 0.1.7. Rerun it, and
-widen `CHECKED_LIBYAML_VERSION` or `CHECKED_RUAMEL_VERSIONS` only afterwards, when either
-package moves.
+`SEARCHED_PAIRS` lists the (ruamel.yaml, ruamel.yaml.clib) releases this search has been
+run on with no divergence; `tests/test_yaml_parser_fuzz.py` fails when the installed pair
+is not among them, so a lock bump fails CI until the search is rerun and the pair added.
+Every clib release so far reports libyaml 0.1.7, so the build gate in `yaml_util` cannot
+tell them apart; this list can. Widen `CHECKED_LIBYAML_VERSION` or
+`CHECKED_RUAMEL_VERSIONS` only after a clean run on the new build.
 """
 
 from __future__ import annotations
@@ -53,10 +54,25 @@ import ruamel.yaml
 from ruamel.yaml.parser import Parser
 
 from frontmatter_format import fmf_split_frontmatter, yaml_util
-from frontmatter_format._libyaml_guard import needs_pure_parser
 from frontmatter_format.yaml_util import new_yaml
 
 Outcome = tuple[Any, ...]
+
+SEARCHED_PAIRS: tuple[tuple[str, str], ...] = (
+    ("0.19.1", "0.2.15"),
+    ("0.18.10", "0.2.15"),
+    ("0.18.17", "0.2.15"),
+    ("0.18.10", "0.2.12"),
+)
+"""(ruamel.yaml, ruamel.yaml.clib) release pairs this search found no divergence on: 0.19.1
+and 0.18.10 with 0.2.15 here (CPython 3.10, 3.12, 3.13; Linux), and 0.18.17 with 0.2.15 and
+0.18.10 with 0.2.12 in review D of PR #9. Add a pair only after a clean run on it."""
+
+
+def installed_pair() -> tuple[str, str]:
+    """The installed (ruamel.yaml, ruamel.yaml.clib) versions, the latter "not installed"
+    without the extension."""
+    return (ruamel.yaml.__version__, _distribution_version("ruamel.yaml.clib"))
 
 
 def canon(value: Any) -> Any:
@@ -104,13 +120,17 @@ def c_first_outcome(text: str) -> Outcome | None:
     return ("value", canon(value))
 
 
+def kept_reading(text: str) -> Outcome | None:
+    """The C reading the library would keep for `text`, through its own routing predicate
+    (`_c_eligible`) and C attempt, or None when it would read with pure ruamel."""
+    if not yaml_util._c_eligible(text):  # pyright: ignore[reportPrivateUsage]
+        return None
+    return c_first_outcome(text)
+
+
 def check(text: str) -> tuple[str, Outcome, Outcome] | None:
     """A divergence for `text`, or None. Only a kept C reading can differ from pure ruamel."""
-    if needs_pure_parser(text):
-        return None
-    if yaml_util._nesting_bound(text) > yaml_util._C_SCAN_DEPTH:  # pyright: ignore[reportPrivateUsage]
-        return None
-    c_reading = c_first_outcome(text)
+    c_reading = kept_reading(text)
     if c_reading is None:
         return None
     pure_reading = pure_outcome(text)
@@ -133,19 +153,38 @@ WORDS = [
 ]  # fmt: skip
 
 TAGS = ["!!str", "!!int", "!", "!foo", "!!map", "!!seq", "!<tag:yaml.org,2002:str>", "!!set",
-        "!!binary", "!e!x", "!!omap", "!!pairs", "!!null", "!!bool", "!!float", "!!timestamp"]  # fmt: skip
+        "!!binary", "!e!x", "!!omap", "!!pairs", "!!null", "!!bool", "!!float", "!!timestamp",
+        "!<!>", "!<!x>", "!<>", "!!s%74r", "!x!y", "!!python/none"]  # fmt: skip
+
+PROPERTY_JOINS = [
+    " ",
+    " ",
+    " ",
+    "  ",
+    "\n",
+    "\n",
+    "\n  ",
+    " # c\n",
+    "\n# c\n",
+    " #c\n  ",
+    "\r\n",
+    "\n\n",
+]
+"""What separates a node property from its node: usually a space, but also line breaks,
+comments and indentation (review E of PR #9 found two families there)."""
 
 BLOCK_HEADERS = ["|", ">", "|-", ">+", "|2", ">1-", "|+", "|#c", "| #c", ">-  ", "|  #c", "|+2"]
 
 MUTATION_CHARS = list(" \n\r:-?[]{},#&*!|>'\"%@`.a0\\~<é\x85 ﻿\t")
 
-ALPHABET3 = list(" \n\r:-?[]{},#&*!|>'\"%.a\\")
+ALPHABET3 = list(" \n\r:-?[]{},#&*!|>'\"%.a\\<")
 """The alphabet of the exhaustive three-character sweep."""
 
 TEMPLATES3 = [
     "{s}", "k: {s}\n", "[{s}]", "{{{s}}}", "- {s}\n", "k: |\n  {s}\n", "{s}\nk: v\n",
     "? {s}\n: v\n", "k: &a {s}\n", "k: [a, {s}]\n", "k: {{a: {s}}}\n", '["a"{s}]',
-    "k: [{s}:x]\n", "[{s}, b]", "k: !!str {s}\n", "--- {s}\n",
+    "k: [{s}:x]\n", "[{s}, b]", "k: !!str {s}\n", "--- {s}\n", "!!str\n{s}", "--- &a\n{s}",
+    "{s}\n|\n#x\n", "k: !<!>{s}", "k: !<{s}>\n", "&a{s}\n|\n#x\n",
 ]  # fmt: skip
 """Where each three-character string is inserted; `{s}` is the slot."""
 
@@ -194,7 +233,7 @@ class Generator:
             out.append(rng.choice(TAGS))
         if rng.random() < 0.15:
             out.append("&" + rng.choice(["a", "b", "x1", "a-b", "a_b"]))
-        return " ".join(out) + (" " if out else "")
+        return "".join(prop + rng.choice(PROPERTY_JOINS) for prop in out)
 
     def flow(self, depth: int) -> str:
         rng = self.rng
@@ -251,7 +290,15 @@ class Generator:
         head = rng.choice(
             ["", "", "", "---\n", "--- ", "# c\n", "\n", "--- # c\n", "%YAML 1.2\n---\n"]
         )
-        body = self.block(0, 0) if rng.random() < 0.8 else self.flow(0)
+        if rng.random() < 0.1:
+            head += self.props()
+        roll = rng.random()
+        if roll < 0.75:
+            body = self.block(0, 0)
+        elif roll < 0.95:
+            body = self.flow(0)
+        else:
+            body = self.scalar(0, False)  # A root scalar, often a block scalar.
         tail = rng.choice(["\n", "", "\n...\n", "\n\n", " \n", "\r\n", "\n... # c\n"])
         text = head + body + tail
         if rng.random() < 0.15:
@@ -298,42 +345,37 @@ class Generator:
 
 Divergences = list[tuple[str, Outcome, Outcome]]
 
+Result = tuple[int, int, Divergences]
+"""Texts checked, texts whose C reading the library kept, and the divergences among them."""
 
-def search(job: tuple[int, int, list[str]]) -> tuple[int, Divergences]:
-    seed, count, corpus = job
+
+def check_all(texts: Iterable[str]) -> Result:
     warnings.simplefilter("ignore")
-    found: Divergences = []
-    for text in Generator(random.Random(seed)).texts(count, corpus):
-        result = check(text)
-        if result is not None:
-            found.append(result)
-    return count, found
-
-
-def check_all(texts: list[str]) -> tuple[int, Divergences]:
-    """Every text in `texts` once, unmutated: the corpus seeds themselves."""
-    warnings.simplefilter("ignore")
+    checked = kept = 0
     found: Divergences = []
     for text in texts:
-        result = check(text)
-        if result is not None:
-            found.append(result)
-    return len(texts), found
+        checked += 1
+        c_reading = kept_reading(text)
+        if c_reading is None:
+            continue
+        kept += 1
+        pure_reading = pure_outcome(text)
+        if c_reading != pure_reading:
+            found.append((text, c_reading, pure_reading))
+    return checked, kept, found
 
 
-def exhaustive(job: tuple[int, int]) -> tuple[int, Divergences]:
+def search(job: tuple[int, int, list[str]]) -> Result:
+    seed, count, corpus = job
+    return check_all(Generator(random.Random(seed)).texts(count, corpus))
+
+
+def exhaustive(job: tuple[int, int]) -> Result:
     low, high = job
-    warnings.simplefilter("ignore")
-    found: Divergences = []
-    checked = 0
-    for chars in itertools.islice(itertools.product(ALPHABET3, repeat=3), low, high):
-        slot = "".join(chars)
-        for template in TEMPLATES3:
-            checked += 1
-            result = check(template.format(s=slot))
-            if result is not None:
-                found.append(result)
-    return checked, found
+    slots = itertools.islice(itertools.product(ALPHABET3, repeat=3), low, high)
+    return check_all(
+        template.format(s="".join(chars)) for chars in slots for template in TEMPLATES3
+    )
 
 
 def corpus_texts(roots: list[str]) -> list[str]:
@@ -354,7 +396,7 @@ def corpus_texts(roots: list[str]) -> list[str]:
     return [text for text in dict.fromkeys(texts) if 0 < len(text) <= 6000]
 
 
-def results(worker: Any, jobs: list[Any], workers: int | None) -> Iterator[tuple[int, Divergences]]:
+def results(worker: Any, jobs: list[Any], workers: int | None) -> Iterator[Result]:
     if workers == 1:
         yield from map(worker, jobs)
         return
@@ -405,6 +447,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if not args.count and not args.exhaustive and not args.corpus:
+        parser.error("nothing to search: give a count, --exhaustive or --corpus")
     if not yaml_util._c_parser_active():  # pyright: ignore[reportPrivateUsage]
         message = "no usable C parser: ruamel.yaml.clib is not installed, is not the checked build, or is turned off"
         print(message, file=sys.stderr)
@@ -414,21 +458,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.corpus and not corpus:
         print("no YAML found under the corpus paths", file=sys.stderr)
         return 2
-    if not args.count and not args.exhaustive and not corpus:
-        parser.error("nothing to search: give a count, --exhaustive or --corpus")
 
     sizes = [args.batch] * (args.count // args.batch)
     if args.count % args.batch:
         sizes.append(args.count % args.batch)
     jobs: list[Any] = [(args.seed + index, size, corpus) for index, size in enumerate(sizes)]
-    total = 0
+    total = kept_total = 0
     found: dict[str, tuple[Outcome, Outcome]] = {}
     # The corpus seeds themselves first, unmutated, then the generated or mutated texts.
-    seeds_checked, seed_divergences = check_all(corpus)
+    seeds_checked, seeds_kept, seed_divergences = check_all(corpus)
+    kept_total += seeds_kept
     for text, c_reading, pure_reading in seed_divergences:
         found.setdefault(text, (c_reading, pure_reading))
-    for checked, divergences in results(search, jobs, args.jobs):
+    for checked, kept, divergences in results(search, jobs, args.jobs):
         total += checked
+        kept_total += kept
         for text, c_reading, pure_reading in divergences:
             found.setdefault(text, (c_reading, pure_reading))
     exhaustive_total = 0
@@ -436,22 +480,28 @@ def main(argv: list[str] | None = None) -> int:
         combos = len(ALPHABET3) ** 3
         step = max(1, combos // 64)
         ranges = [(low, min(low + step, combos)) for low in range(0, combos, step)]
-        for checked, divergences in results(exhaustive, ranges, args.jobs):
+        for checked, kept, divergences in results(exhaustive, ranges, args.jobs):
             exhaustive_total += checked
+            kept_total += kept
             for text, c_reading, pure_reading in divergences:
                 found.setdefault(text, (c_reading, pure_reading))
 
     libyaml = yaml_util._installed_libyaml_version()  # pyright: ignore[reportPrivateUsage]
-    clib = _distribution_version("ruamel.yaml.clib")
+    pair = installed_pair()
     last_seed = args.seed + max(len(jobs), 1) - 1
+    listed = "listed in SEARCHED_PAIRS" if pair in SEARCHED_PAIRS else "NOT in SEARCHED_PAIRS"
     print(
-        f"ruamel.yaml {ruamel.yaml.__version__}, ruamel.yaml.clib {clib} (libyaml {libyaml}), "
+        f"ruamel.yaml {pair[0]}, ruamel.yaml.clib {pair[1]} (libyaml {libyaml}; {listed}), "
         + f"Python {sys.version.split()[0]}, seeds {args.seed}-{last_seed}"
     )
     print(
         f"generated or mutated texts: {total}  exhaustive texts: {exhaustive_total}  "
-        + f"corpus seeds checked: {seeds_checked}  divergences: {len(found)}"
+        + f"corpus seeds checked: {seeds_checked}  kept C readings: {kept_total}  "
+        + f"divergences: {len(found)}"
     )
+    if not kept_total:
+        print("no text was kept from libyaml, so this run is not evidence", file=sys.stderr)
+        return 1
     for text, (c_reading, pure_reading) in sorted(found.items(), key=lambda kv: len(kv[0]))[:40]:
         print(repr(text))
         print("   C   :", repr(c_reading)[:200])
