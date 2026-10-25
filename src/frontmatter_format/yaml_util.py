@@ -173,8 +173,9 @@ PURE_YAML_ENV = "FRONTMATTER_FORMAT_PURE_YAML"
 """
 Environment variable that, set to anything but empty or `0`, turns off the C parser.
 
-For diagnosis: results are the same either way, so this changes only speed and what
-`yaml_parser_mode` reports. It is read on every load, so setting it in-process works too.
+For diagnosis: results are meant to be the same either way (see the build gate,
+`CHECKED_LIBYAML_VERSION`), so this changes only speed and what `yaml_parser_mode` reports.
+It is read on every load, so setting it in-process works too.
 """
 
 _CParser: Any = getattr(ruamel.yaml.main, "CParser", None)
@@ -246,16 +247,19 @@ not a container. Deeper documents are read again by pure ruamel, which then retu
 raises whatever it does at the caller's depth.
 """
 
-_C_SCAN_DEPTH = 1000
+_C_SCAN_DEPTH = 200
 """Nesting the text may reach, by a cheap upper bound, beyond which it skips the C parser.
 
-ruamel's C composer recurses on the C stack and segfaults at about 30,000 nested
-collections under an 8 MB stack, before any value exists to check against `_C_MAX_DEPTH`.
-A document whose shape allows more than this many levels (see `_nesting_bound`) is read
-by pure ruamel instead, which raises `RecursionError` where it cannot compose. At about
-270 bytes of C stack per level, this bound also leaves room on smaller thread stacks.
-Any document that really nests past `_C_MAX_DEPTH` ends with pure ruamel anyway, so the
-bound costs speed only on a document with more than a thousand flow collections in all.
+ruamel's C composer recurses on the C stack, about 300 bytes per level, and a stack
+overflow there is a segfault on CPython 3.10 to 3.13 (3.14 turns it into
+`RecursionError`), before any node exists to check against `_C_MAX_DEPTH`. It overflows at
+about 30,000 levels on an 8 MB main-thread stack and at about 400 on a 128 KB thread stack,
+which is the default on musl-based images such as `python:*-alpine` and a common setting
+for worker threads. A document whose shape allows more than this many levels (see
+`_nesting_bound`) is read by pure ruamel instead, which raises `RecursionError` where it
+cannot compose. 200 leaves a 128 KB thread about half its stack. Any document that really
+nests past `_C_MAX_DEPTH` ends with pure ruamel anyway, so the bound costs speed only on a
+document with more than two hundred flow collections in all, or indented a hundred columns.
 """
 
 _FLOW_OPEN = re.compile(r"(?<![^ \t\r\n\[{,:?])[\[{]")
@@ -309,7 +313,9 @@ def yaml_parser_mode() -> Literal["c-first", "pure"]:
     replaced or configured the loader in a way ruamel's C loader would bypass (see
     `_accepts_c_parser`). The build check happens once at import; the environment variable
     and the customizers are consulted on every call, which builds one instance with
-    `new_yaml()`. Results are the same in both modes; only speed differs.
+    `new_yaml()`. Results are meant to be the same in both modes, with only speed differing;
+    the guards that make that so rest on a differential search, which is why the build gate
+    exists.
     """
     return "c-first" if _c_parser_active() and _accepts_c_parser(new_yaml()) else "pure"
 
@@ -326,24 +332,38 @@ def _load_yaml_text(text: Any) -> Any:
     """
     Load one YAML document exactly as pure ruamel reads it with `new_yaml()`.
 
-    With the C extension active, a `str` without any shape from `needs_pure_parser`, and
-    whose shape cannot nest past `_C_SCAN_DEPTH`, is read by libyaml first. If that attempt
-    raises anything at all, or yields a value pure ruamel might not, the text is read again
-    by pure ruamel, with the same instance, and whatever that returns or raises is the
-    result. Bytes and streams, which ruamel also reads, go to pure ruamel directly.
+    With the C extension active, a text `_c_eligible` clears is read by libyaml first. If
+    that attempt raises anything at all, or composes a document pure ruamel might not read
+    the same way, the text is read again by pure ruamel, with the same instance, and
+    whatever that returns or raises is the result. Bytes and streams, which ruamel also
+    reads, go to pure ruamel directly.
+
+    Two visible differences remain on the C path, neither of which changes a value: a
+    constructor a customizer registered that raises on the C attempt runs again on the pure
+    re-read, so its side effects happen twice; and a warning issued during a kept C reading
+    carries libyaml's marks, which have no source snippet. The default configuration issues
+    no constructor warnings; an instance set to warn on duplicate keys stays on pure ruamel
+    (`_accepts_c_parser`).
     """
     yaml = new_yaml()
-    if (
-        isinstance(text, str)
-        and _c_parser_active()
-        and _accepts_c_parser(yaml)
-        and not needs_pure_parser(text)
-        and _nesting_bound(text) <= _C_SCAN_DEPTH
-    ):
+    if _c_parser_active() and _accepts_c_parser(yaml) and _c_eligible(text):
         value = _load_with_c(yaml, text)
         if value is not _C_FAILED:
             return value
     return _load_pure(yaml, text)
+
+
+def _c_eligible(text: Any) -> bool:
+    """
+    Whether `text` may be given to libyaml: a `str` without any shape from
+    `needs_pure_parser` whose shape cannot nest past `_C_SCAN_DEPTH`. The one routing
+    predicate, shared with the differential search in `devtools/yaml_parser_fuzz.py`.
+    """
+    return (
+        isinstance(text, str)
+        and not needs_pure_parser(text)
+        and _nesting_bound(text) <= _C_SCAN_DEPTH
+    )
 
 
 _C_FAILED: Any = object()
@@ -411,14 +431,16 @@ def _accepts_c_parser(yaml: YAML) -> bool:
 
     ruamel's C loader replaces the reader, scanner, parser and composer and builds its own
     constructor and resolver objects, so a customizer that replaced or configured any of
-    those, or set a version or a depth limit, keeps the pure parser. The attributes are
-    read with defaults because they differ between ruamel releases: 0.18 has no
-    `max_depth`.
+    those, or set a version or a depth limit, keeps the pure parser. So does an instance set
+    to warn on duplicate keys (`allow_duplicate_keys = None`): the warning's marks come from
+    the parser, and libyaml's have no source snippet. The attributes are read with
+    defaults because they differ between ruamel releases: 0.18 has no `max_depth`.
     """
     return (
         yaml.Parser is Parser
         and yaml.Composer is Composer
         and yaml.Constructor is not None
+        and getattr(yaml, "allow_duplicate_keys", False) is not None
         and yaml.Reader is None
         and yaml.Scanner is None
         and getattr(yaml, "version", None) is None

@@ -26,12 +26,12 @@ softschema (`softschema/_portable.py`) carries the same guards for its own reade
 two agree on every shared family: the tab, NEL/LS/PS/BOM, `%` directive line, `...`
 line, `|#` header, space-line, root block scalar and quoted-colon rules are the same
 rules (softschema writes them with Python 3.11 possessive quantifiers). This module has
-more families, because this loader keeps tags, anchors, aliases and non-string keys,
-which softschema's preflight and value check reject on both paths: the flow `?` and
-token-colon rules, the anchor-name rule, the empty `!` rule, and tag or anchor prefixes
-on a root block scalar. softschema alone routes a colon after a space in block context
-(`a: x :y`), which libyaml rejects, so here the fallback covers it. Any new family found
-in one must be ported to the other.
+three more rules because this loader keeps tags, anchors, aliases and non-string keys,
+which softschema's preflight and value check reject on both paths: every node property
+or alias (`!`, `&` or `*` at the start of a token) is routed here, as is a flow `?` and a
+colon at the start of a token or after a flow collection. softschema alone routes a colon
+after a space in block context (`a: x :y`), which libyaml rejects, so here the fallback
+covers it. Any new family found in one must be ported to the other.
 """
 
 from __future__ import annotations
@@ -115,12 +115,13 @@ def _block_scalar_before_space_line(text: str) -> bool:
 
 
 _ROOT_BLOCK_SCALAR = re.compile(
-    r"(?:[ \r\n]|#[^\r\n]*(?![^\r\n])|(?:---|\.\.\.)(?=[ \r\n]|\Z))*(?:[!&][^ \r\n]*[ ]+)*[|>]"
+    r"(?:[ \r\n]|#[^\r\n]*(?![^\r\n])|(?:---|\.\.\.)(?=[ \r\n]|\Z))*[|>]"
 )
 """A document that may be a block scalar, after any blank lines, comments and markers.
 
 Its content may start at column zero, where libyaml reads a `#` line as a comment and pure
-ruamel reads it as content.
+ruamel reads it as content. A block scalar with a tag or anchor before it, on the same line
+or an earlier one, is routed by `_NODE_PROPERTY` before this rule is reached.
 
 The lookahead after a comment, `(?![^\\r\\n])`, lets it end only at a line break, so the
 repetition has exactly one way to consume each line. Without it, the engine could stop a
@@ -175,20 +176,23 @@ key, where pure ruamel expects `,` or `]`: `[[]:]` is `[{(): None}]` to libyaml 
 `ParserError` to pure ruamel, and so are `k: [[a]:b]` and `[a, []:x]`.
 """
 
-_ANCHOR_NAME_END = re.compile(r"[&*](?<![^ \r\n\[{,?:-][&*])[0-9A-Za-z_-]+[?:%@`]")
-"""An anchor or alias, at the start of a token, whose name runs into `?`, `:`, `%`, `@` or a
-backtick.
+_NODE_PROPERTY = re.compile(r"[!&*](?<![^ \t\r\n\[{,\]}?-][!&*])")
+"""A tag (`!`), anchor (`&`) or alias (`*`) indicator at the start of a token: at the start
+of the text or after whitespace, a flow indicator, `?` or `-`. Anywhere else these
+characters are content to both parsers (`Tom&Jerry`, `a*b`, `Hello!`).
 
-libyaml ends an anchor name at the first character outside `[0-9A-Za-z_-]` and accepts
-these five as the next token, so `&a: 1` is an anchored empty key to it; pure ruamel takes
-them as part of the name, so `&a: 1` is the integer 1 anchored as `a:`.
-"""
-
-_EMPTY_NON_SPECIFIC_TAG = re.compile(r"!(?<![^ \r\n\[{,?:-]!)(?=[ \r\n,\]}]|\Z)")
-"""A non-specific tag `!` written alone, before a space, line break or flow indicator.
-
-On an empty node, libyaml's event leaves the node an empty string and pure ruamel's leaves
-it null, so `k: !` reads `''` in one and `None` in the other.
+Every text with a node property or alias is read by pure ruamel. Three families were found
+one at a time where a property meets what follows it, and each was a silent difference the
+fallback cannot see: libyaml ends an anchor name at the first character outside
+`[0-9A-Za-z_-]`, so `&a: 1` is an anchored empty key to it and the integer 1 anchored as
+`a:` to pure ruamel; on an empty node the non-specific tag, written `!` or `!<!>`, is an
+empty string to libyaml and null to pure ruamel (`k: !`, `k: !<!>`); and a root block
+scalar whose tag or anchor sits on an earlier line (`--- !!str\n|\n#x\n`) has its
+column-zero `#` line read as a comment by libyaml and as content by pure ruamel. Routing
+the whole class closes the shapes not yet found as well. Frontmatter rarely carries
+properties (4 of 140 real frontmatter blocks and YAML files sampled did, all GitHub
+workflow files with `&&`, `'* *'` or `"*.ts"` after a space), so the cost is small, and an
+alias always went back to pure ruamel anyway, because a shared node discards the C reading.
 """
 
 
@@ -217,8 +221,6 @@ def needs_pure_parser(text: str) -> bool:
             return True
         if ":" in text and _FLOW_TOKEN_COLON.search(text) is not None:
             return True
-    if ("&" in text or "*" in text) and _ANCHOR_NAME_END.search(text) is not None:
-        return True
-    if "!" in text and _EMPTY_NON_SPECIFIC_TAG.search(text) is not None:
+    if ("!" in text or "&" in text or "*" in text) and _NODE_PROPERTY.search(text) is not None:
         return True
     return _ROOT_BLOCK_SCALAR.match(text) is not None
