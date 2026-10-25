@@ -5,14 +5,19 @@ convenience functions.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Iterable
 from io import StringIO
 from pathlib import Path
-from typing import Any, Literal, TextIO
+from typing import Any, Literal, TextIO, cast
 
+import ruamel.yaml.main
 from ruamel.yaml import YAML, Representer
+from ruamel.yaml.composer import Composer
+from ruamel.yaml.parser import Parser
 from ruamel.yaml.representer import RepresenterError
 
+from ._libyaml_guard import needs_pure_parser
 from .key_sort import KeySort
 
 YamlTyp = Literal["rt", "safe", "unsafe", "full", "base"]
@@ -84,8 +89,14 @@ def new_yaml(
     `register_class`, apply to that instance only, and ruamel's shared classes are left
     unchanged. Use `add_default_yaml_representer` or `add_default_yaml_customizer` to
     reach every instance built afterwards.
+
+    The instance always uses ruamel's pure-Python parser and emitter, even when ruamel's
+    optional C extension is installed, so its reading and its output bytes do not depend
+    on what else is installed. `from_yaml_string`, `read_yaml_file` and the frontmatter
+    readers use the C parser where it reads exactly as this instance does; see
+    `yaml_parser_mode`.
     """
-    yaml = YAML(typ=typ)
+    yaml = YAML(typ=typ, pure=True)
     # ruamel's `add_representer` and `add_constructor` are classmethods on the representer
     # and constructor classes every instance of a `typ` shares, so registering this
     # instance's representers there would rewrite every other instance's output, including
@@ -154,19 +165,156 @@ def new_yaml(
     return yaml
 
 
+PURE_YAML_ENV = "FRONTMATTER_FORMAT_PURE_YAML"
+"""
+Environment variable that, set to anything but empty or `0`, turns off the C parser.
+
+For diagnosis: results are the same either way, so this changes only speed and what
+`yaml_parser_mode` reports. It is read on every load, so setting it in-process works too.
+"""
+
+_CParser: Any = getattr(ruamel.yaml.main, "CParser", None)
+"""ruamel's libyaml parser class if its C extension was importable, otherwise None.
+
+Taken from `ruamel.yaml.main` so that it is the very object ruamel compares a YAML
+instance's `Parser` with when it picks its C loading path.
+"""
+
+_C_MAX_DEPTH = 100
+"""Deepest nesting of collections for which a C reading is kept.
+
+Pure ruamel composes nodes recursively and raises `RecursionError` at about 490 levels
+under Python's default recursion limit, where libyaml reads on. Deeper values are read
+again by pure ruamel, which then returns or raises whatever it does at the caller's depth.
+"""
+
+_LOADER_ATTRS = ("_reader", "_scanner", "_parser", "_composer", "_constructor", "_resolver")
+
+
+def yaml_parser_mode() -> Literal["c-first", "pure"]:
+    """
+    Which ruamel parser `from_yaml_string`, `read_yaml_file` and the frontmatter readers
+    use in this process.
+
+    `"c-first"` means ruamel's C extension (`ruamel.yaml.clib`) is installed and not turned
+    off with `FRONTMATTER_FORMAT_PURE_YAML`: libyaml reads each text that has none of the
+    shapes on which it was found to differ from pure ruamel, and pure ruamel reads the rest
+    and every text libyaml fails on. `"pure"` means every text is read by pure ruamel.
+    Results are the same in both modes; only speed differs.
+
+    A default customizer that replaces or configures the loader (see `_accepts_c_parser`)
+    keeps every text on pure ruamel even when this reports `"c-first"`.
+    """
+    return "c-first" if _c_parser_active() else "pure"
+
+
+def _c_parser_active() -> bool:
+    return _CParser is not None and os.environ.get(PURE_YAML_ENV, "") in ("", "0")
+
+
+def _load_yaml_text(text: str) -> Any:
+    """
+    Load one YAML document exactly as pure ruamel reads it with `new_yaml()`.
+
+    With the C extension active, a text without any shape from `needs_pure_parser` is read
+    by libyaml first. If that attempt raises anything at all, or yields a value pure ruamel
+    might not, the text is read again by pure ruamel and whatever that returns or raises is
+    the result.
+    """
+    if _c_parser_active() and not needs_pure_parser(text):
+        value = _load_with_c(text)
+        if value is not _C_FAILED:
+            return value
+    return _load_pure(text)
+
+
+_C_FAILED: Any = object()
+"""What `_load_with_c` returns when the C reading cannot be used."""
+
+
+def _load_with_c(text: str) -> Any:
+    """libyaml's reading of `text` through `new_yaml()`'s loader, or `_C_FAILED`."""
+    yaml = new_yaml()
+    if not _accepts_c_parser(yaml):
+        return _C_FAILED
+    yaml.Parser = _CParser
+    try:
+        value = yaml.load(text)
+    except Exception:
+        return _C_FAILED
+    if _nested_deeper_than(value, _C_MAX_DEPTH):
+        return _C_FAILED
+    return value
+
+
+def _load_pure(text: str) -> Any:
+    return new_yaml().load(text)
+
+
+def _accepts_c_parser(yaml: YAML) -> bool:
+    """
+    Whether swapping in the C parser leaves everything else about loading as configured.
+
+    ruamel's C loader replaces the reader, scanner, parser and composer and builds its own
+    constructor and resolver objects, so a customizer that replaced or configured any of
+    those, or set a version or a depth limit, keeps the pure parser.
+    """
+    return (
+        yaml.Parser is Parser
+        and yaml.Composer is Composer
+        and yaml.Reader is None
+        and yaml.Scanner is None
+        and yaml.version is None
+        and not yaml.max_depth
+        and not any(hasattr(yaml, attr) for attr in _LOADER_ATTRS)
+    )
+
+
+_CONTAINERS = (dict, list, tuple, set, frozenset)
+
+
+def _nested_deeper_than(value: Any, limit: int) -> bool:
+    """
+    Whether `value` nests collections more than `limit` deep, or reaches one collection
+    twice, as an alias does. Either sends the text back to pure ruamel.
+    """
+    if not isinstance(value, _CONTAINERS):
+        return False
+    seen: set[int] = set()
+    level: list[Any] = [value]
+    depth = 1
+    while level:
+        if depth > limit:
+            return True
+        below: list[Any] = []
+        for node in level:
+            if id(node) in seen:
+                return True
+            seen.add(id(node))
+            if isinstance(node, dict):
+                mapping = cast(dict[Any, Any], node)
+                below += [child for child in mapping.values() if isinstance(child, _CONTAINERS)]
+            below += [
+                child for child in cast(Iterable[Any], node) if isinstance(child, _CONTAINERS)
+            ]
+        level = below
+        depth += 1
+    return False
+
+
 def from_yaml_string(yaml_string: str) -> Any:
     """
-    Read a YAML string into a Python object.
+    Read a YAML string into a Python object, as `new_yaml().load()` reads it.
     """
-    return new_yaml().load(yaml_string)
+    return _load_yaml_text(yaml_string)
 
 
 def read_yaml_file(path: str | Path) -> Any:
     """
-    Read YAML file into a Python object.
+    Read YAML file into a Python object, as `new_yaml().load()` reads its text.
     """
     path = Path(path)
-    return new_yaml().load(path.read_text(encoding="utf-8"))
+    return _load_yaml_text(path.read_text(encoding="utf-8"))
 
 
 def to_yaml_string(

@@ -258,6 +258,27 @@ formatted ISO 8601 strings instead.
 Alias-free output improves portability, but it does not restrict metadata to a
 JSON-compatible subset of YAML.
 
+### Faster Reading with ruamel’s C Extension
+
+If ruamel’s optional C extension, `ruamel.yaml.clib`, is installed, the readers
+(`fmf_read`, `fmf_read_frontmatter`, `from_yaml_string` and `read_yaml_file`) parse with
+libyaml wherever it reads a text as pure-Python ruamel does.
+libyaml implements YAML 1.1 and pure ruamel YAML 1.2, so the two disagree on some texts.
+A text with a shape on which libyaml was found to read differently (a tab, a line
+starting with `%`, NEL, LS, PS or a byte order mark, a second `...` marker, and a few
+block scalar, flow, anchor and tag forms) goes straight to pure ruamel, and any text
+libyaml fails on is read again by pure ruamel.
+Values, types, key order and errors are always pure ruamel’s.
+
+The extension is not a dependency of this package.
+To use it, install it in the same environment, for example with `uv add ruamel.yaml.clib`.
+`frontmatter_format.yaml_parser_mode()` returns `"c-first"` when it is in use and `"pure"`
+otherwise. Set `FRONTMATTER_FORMAT_PURE_YAML=1` to read with pure ruamel only, for
+diagnosis.
+
+Writers are unaffected: `new_yaml` always configures ruamel’s pure-Python parser and
+emitter, so output bytes are the same with or without the extension.
+
 ## Installation
 
 Install `frontmatter-format` from PyPI with your preferred Python package manager:
