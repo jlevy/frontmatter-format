@@ -1,13 +1,27 @@
 from datetime import date, datetime, timezone
 from io import StringIO
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
-from ruamel.yaml.representer import RepresenterError
+from ruamel.yaml import YAML
+from ruamel.yaml.constructor import (
+    BaseConstructor,
+    ConstructorError,
+    RoundTripConstructor,
+    SafeConstructor,
+)
+from ruamel.yaml.representer import (
+    BaseRepresenter,
+    RepresenterError,
+    RoundTripRepresenter,
+    SafeRepresenter,
+)
 
-from frontmatter_format import YamlSerializationError
+from frontmatter_format import YamlSerializationError, yaml_util
 from frontmatter_format.key_sort import custom_key_sort
 from frontmatter_format.yaml_util import (
+    YamlTyp,
     dump_yaml,
     from_yaml_string,
     new_yaml,
@@ -154,3 +168,125 @@ def test_write_yaml_file_with_suppress_vals(tmp_path: Path):
     assert read_data["author"] == "Test Author"
     assert read_data["date"] == "2022-01-01"
     assert read_data["content"] == "Some content"
+
+
+def _dump(yaml: YAML, value: object) -> str:
+    stream = StringIO()
+    yaml.dump(value, stream)
+    return stream.getvalue()
+
+
+@pytest.mark.parametrize("typ", ["rt", "safe"])
+def test_a_later_instance_does_not_change_an_earlier_instances_output(typ: YamlTyp):
+    """Each instance keeps its own representers; building another one cannot rewrite them."""
+    keep_everything = new_yaml(suppress_vals=lambda _value: False, typ=typ)
+    value: dict[str, Any] = {"kept_null": None, "kept_empty": {}, "text": "x"}
+    before = _dump(keep_everything, value)
+    new_yaml(typ=typ)  # Default policy: drops None and {}.
+    assert _dump(keep_everything, value) == before
+    assert "kept_null: null" in before and "kept_empty: {}" in before
+
+
+def test_a_later_instance_does_not_change_an_earlier_instances_key_order():
+    reversed_keys = new_yaml(key_sort=lambda key: tuple(-ord(c) for c in key), typ="rt")
+    value = {"a": 1, "b": 2, "c": 3}
+    before = _dump(reversed_keys, value)
+    new_yaml(typ="rt")
+    assert _dump(reversed_keys, value) == before
+    assert before.splitlines() == ["c: 3", "b: 2", "a: 1"]
+
+
+def test_new_yaml_leaves_ruamels_shared_representer_tables_unchanged():
+    def table(cls: type) -> dict[Any, Any]:
+        return dict(cast(dict[Any, Any], cls.yaml_representers))
+
+    tables = {cls: table(cls) for cls in (RoundTripRepresenter, SafeRepresenter)}
+    for typ in ("rt", "safe"):
+        new_yaml(suppress_vals=lambda _value: False, typ=typ, stringify_unknown=True)
+        new_yaml(typ=typ)
+    assert {cls: table(cls) for cls in tables} == tables
+
+
+def test_building_an_instance_mid_dump_does_not_change_the_rest_of_the_document():
+    """The race the fix removes: a default-policy instance built partway through a dump
+    used to switch the policy of the rest of the document. One thread reproduces it."""
+
+    class Trigger:
+        pass
+
+    def represent_trigger(dumper, _trigger):  # pyright: ignore
+        new_yaml(typ="rt")  # Rebuilds the default policy partway through this dump.
+        return dumper.represent_str("t")
+
+    writer = new_yaml(suppress_vals=lambda _value: False, typ="rt")
+    writer.representer.add_representer(Trigger, represent_trigger)
+    value = {"a": {"x": None}, "b": Trigger(), "c": {"x": None}}
+    assert _dump(writer, value) == "a:\n  x: null\nb: t\nc:\n  x: null\n"
+
+
+class _Tagged:
+    yaml_tag: str = "!Tagged"
+    x: int
+
+    def __init__(self, x: int):
+        self.x = x
+
+    @classmethod
+    def to_yaml(cls, representer: Any, node: "_Tagged") -> Any:
+        return representer.represent_scalar(cls.yaml_tag, str(node.x))
+
+    @classmethod
+    def from_yaml(cls, _constructor: Any, node: Any) -> "_Tagged":
+        return cls(int(node.value))
+
+
+@pytest.mark.parametrize("typ", ["rt", "safe"])
+def test_constructors_registered_on_an_instance_stay_with_it(typ: YamlTyp):
+    """`register_class` registers a constructor as well as a representer; both are private."""
+
+    def table(cls: type) -> dict[Any, Any]:
+        return dict(cast(dict[Any, Any], cls.yaml_constructors))
+
+    shared = {cls: table(cls) for cls in (RoundTripConstructor, SafeConstructor)}
+    registered = new_yaml(typ=typ)
+    registered.register_class(_Tagged)
+    loaded = registered.load("!Tagged 7")
+    assert isinstance(loaded, _Tagged) and loaded.x == 7
+    assert _dump(registered, {"t": _Tagged(7)}) == "t: !Tagged 7\n"
+
+    for other in (new_yaml(typ=typ), YAML(typ=typ)):
+        if typ == "safe":
+            with pytest.raises(ConstructorError):
+                other.load("!Tagged 7")
+        else:  # The round-trip loader keeps an unknown tag as a `TaggedScalar`.
+            assert not isinstance(other.load("!Tagged 7"), _Tagged)
+    assert {cls: table(cls) for cls in shared} == shared
+
+
+@pytest.mark.parametrize("typ", ["rt", "safe", "full", "base"])
+def test_every_typ_builds(typ: YamlTyp):
+    """`typ="full"` has no constructor class to subclass; the others have both."""
+    yaml = new_yaml(typ=typ)
+    assert issubclass(yaml.Representer, BaseRepresenter)
+    if typ == "full":
+        assert yaml.Constructor is None
+    else:
+        assert issubclass(yaml.Constructor, BaseConstructor)
+        assert yaml.Constructor is not BaseConstructor
+    if typ != "base":
+        assert _dump(yaml, {"a": 1, "b": ["x"]}) == "a: 1\nb:\n- x\n"
+
+
+def test_default_representers_still_apply_to_every_new_instance(monkeypatch: pytest.MonkeyPatch):
+    class Point:
+        x: int
+
+        def __init__(self, x: int):
+            self.x = x
+
+    monkeypatch.setattr(yaml_util, "_default_yaml_customizers", [])
+    yaml_util.add_default_yaml_representer(
+        Point, lambda dumper, point: dumper.represent_scalar("tag:yaml.org,2002:str", f"p{point.x}")
+    )
+    for typ in ("rt", "safe"):
+        assert _dump(new_yaml(typ=typ), {"at": Point(3)}) == "at: p3\n"
