@@ -17,6 +17,7 @@ import ruamel.yaml
 import ruamel.yaml.main
 from ruamel.yaml import YAML, Representer
 from ruamel.yaml.composer import Composer
+from ruamel.yaml.nodes import CollectionNode, MappingNode
 from ruamel.yaml.parser import Parser
 from ruamel.yaml.representer import RepresenterError
 
@@ -235,11 +236,14 @@ _C_PARSER_CHECKED: bool = _c_parser_is_checked()
 """Whether the readers may use the C parser at all, decided once at import."""
 
 _C_MAX_DEPTH = 100
-"""Deepest nesting of collections for which a C reading is kept.
+"""Deepest nesting of collection nodes for which a C reading is kept.
 
 Pure ruamel composes nodes recursively and raises `RecursionError` at about 490 levels
-under Python's default recursion limit, where libyaml reads on. Deeper values are read
-again by pure ruamel, which then returns or raises whatever it does at the caller's depth.
+under Python's default recursion limit, where libyaml reads on. The check runs on the
+document libyaml composed, before anything is constructed from it (see
+`_checked_constructor`), so a tag constructor cannot hide depth inside an object that is
+not a container. Deeper documents are read again by pure ruamel, which then returns or
+raises whatever it does at the caller's depth.
 """
 
 _C_SCAN_DEPTH = 1000
@@ -301,14 +305,13 @@ def yaml_parser_mode() -> Literal["c-first", "pure"]:
     `FRONTMATTER_FORMAT_PURE_YAML`: libyaml reads each text that has none of the shapes on
     which it was found to differ from pure ruamel, and pure ruamel reads the rest and every
     text libyaml fails on. `"pure"` means every text is read by pure ruamel: the extension
-    is absent, is another build or release, or is turned off. The build check happens once
-    at import; the environment variable is read on every call. Results are the same in
-    both modes; only speed differs.
-
-    A default customizer that replaces or configures the loader (see `_accepts_c_parser`)
-    keeps every text on pure ruamel even when this reports `"c-first"`.
+    is absent, is another build or release, is turned off, or a default customizer has
+    replaced or configured the loader in a way ruamel's C loader would bypass (see
+    `_accepts_c_parser`). The build check happens once at import; the environment variable
+    and the customizers are consulted on every call, which builds one instance with
+    `new_yaml()`. Results are the same in both modes; only speed differs.
     """
-    return "c-first" if _c_parser_active() else "pure"
+    return "c-first" if _c_parser_active() and _accepts_c_parser(new_yaml()) else "pure"
 
 
 def _c_parser_active() -> bool:
@@ -353,20 +356,49 @@ def _load_with_c(yaml: YAML, text: str) -> Any:
     `_C_FAILED`. Either way `yaml` is left as it was, ready for a pure reading: ruamel's C
     loading path hangs its combined loader and the stream on the instance, and the pure
     path would pick that loader up as its scanner.
+
+    The instance's constructor is wrapped for the attempt (`_checked_constructor`), so the
+    document libyaml composes is checked for depth and sharing before anything is
+    constructed from it.
     """
     before = set(vars(yaml))
+    constructor = yaml.Constructor
     yaml.Parser = _CParser
+    yaml.Constructor = _checked_constructor(constructor)
     try:
-        value = yaml.load(text)
+        return yaml.load(text)
     except Exception:
         return _C_FAILED
     finally:
         yaml.Parser = Parser
+        yaml.Constructor = constructor
         for attr in set(vars(yaml)) - before:
             delattr(yaml, attr)
-    if _nested_deeper_than(value, _C_MAX_DEPTH):
-        return _C_FAILED
-    return value
+
+
+class _CReadingDiscarded(Exception):
+    """Raised inside a C attempt whose composed document is one pure ruamel may not read the
+    same way: nested past `_C_MAX_DEPTH`, or reaching one collection node twice."""
+
+
+def _checked_constructor(base: type) -> type:
+    """
+    A subclass of the constructor class `base` whose `construct_document` first checks the
+    composed document with `_node_nested_deeper_than`.
+
+    ruamel's C loader derives its combined loader from the instance's `Constructor` and
+    calls `construct_document` with the root node libyaml composed, so this is the one
+    point between composing and constructing on that path. Checking nodes rather than the
+    constructed value means a constructor a customizer registered for a tag cannot hide a
+    deep document inside an object that is not a container (Qodo's `!box` case).
+    """
+
+    def construct_document(self: Any, node: Any) -> Any:
+        if _node_nested_deeper_than(node, _C_MAX_DEPTH):
+            raise _CReadingDiscarded
+        return base.construct_document(self, node)  # pyright: ignore[reportAttributeAccessIssue]
+
+    return type(base.__name__, (base,), {"construct_document": construct_document})
 
 
 def _load_pure(yaml: YAML, text: Any) -> Any:
@@ -386,6 +418,7 @@ def _accepts_c_parser(yaml: YAML) -> bool:
     return (
         yaml.Parser is Parser
         and yaml.Composer is Composer
+        and yaml.Constructor is not None
         and yaml.Reader is None
         and yaml.Scanner is None
         and getattr(yaml, "version", None) is None
@@ -394,37 +427,36 @@ def _accepts_c_parser(yaml: YAML) -> bool:
     )
 
 
-_CONTAINERS = (dict, list, tuple, set, frozenset)
-
-
-def _nested_deeper_than(value: Any, limit: int) -> bool:
+def _node_nested_deeper_than(node: Any, limit: int) -> bool:
     """
-    Whether `value` nests collections more than `limit` deep, or reaches one non-empty
-    collection twice, as an alias does. Either sends the text back to pure ruamel. Empty
-    collections are skipped: CPython shares one empty tuple, so `{[]: a}` twice would
-    otherwise look like an alias, and an empty collection has nothing below it.
+    Whether the composed document `node` nests collection nodes more than `limit` deep, or
+    reaches one collection node twice, as an alias does. Either sends the text back to pure
+    ruamel.
+
+    Both composers hand an alias the very node object its anchor produced, so sharing is a
+    repeated node. Every node object is distinct otherwise, so two empty sequences are two
+    nodes, where the constructed values could be CPython's one shared empty tuple.
     """
-    if not isinstance(value, _CONTAINERS):
+    if not isinstance(node, CollectionNode):
         return False
     seen: set[int] = set()
-    level: list[Any] = [value]
+    level: list[CollectionNode] = [node]
     depth = 1
     while level:
         if depth > limit:
             return True
-        below: list[Any] = []
-        for node in level:
-            if not node:
-                continue
-            if id(node) in seen:
+        below: list[CollectionNode] = []
+        for current in level:
+            if id(current) in seen:
                 return True
-            seen.add(id(node))
-            if isinstance(node, dict):
-                mapping = cast(dict[Any, Any], node)
-                below += [child for child in mapping.values() if isinstance(child, _CONTAINERS)]
-            below += [
-                child for child in cast(Iterable[Any], node) if isinstance(child, _CONTAINERS)
-            ]
+            seen.add(id(current))
+            children: Iterable[Any]
+            if isinstance(current, MappingNode):
+                pairs = cast(Iterable[tuple[Any, Any]], current.value)
+                children = (part for pair in pairs for part in pair)
+            else:
+                children = cast(Iterable[Any], current.value)
+            below += [child for child in children if isinstance(child, CollectionNode)]
         level = below
         depth += 1
     return False

@@ -415,6 +415,7 @@ def test_a_customizer_that_changes_loading_keeps_the_pure_parser(
     assert from_yaml_string("k: v\n") == {"k": "v"}
     assert fake_c.built == 0
     assert composed == ["x"]
+    assert yaml_parser_mode() == "pure"  # The report follows the reader, not the install.
 
 
 # ---- The switch and the report -----------------------------------------------------------
@@ -741,6 +742,7 @@ def test_a_failed_c_attempt_leaves_the_instance_as_it_was():
     failed = yaml_util._load_with_c(yaml, text)  # pyright: ignore[reportPrivateUsage]
     assert failed is yaml_util._C_FAILED  # pyright: ignore[reportPrivateUsage]
     assert set(vars(yaml)) == set(before) and yaml.Parser is Parser
+    assert yaml.Constructor is before["Constructor"]
     assert yaml.load(text) == read_pure(text) == {"sources": ["https://example.com/a"]}
 
 
@@ -767,6 +769,80 @@ def test_shared_empty_tuples_are_not_taken_for_aliases(spies: dict[str, list[str
     text = "- {[]: a}\n- {[]: b}\n"  # Both keys are CPython's one empty tuple.
     assert outcome(from_yaml_string, text) == outcome(read_pure, text)
     assert spies == {"c": [text], "pure": []}
+
+
+class _Box:
+    items: Any
+
+    def __init__(self, items: Any) -> None:
+        self.items = items
+
+
+def _construct_box(_constructor: Any, node: Any) -> _Box:
+    return _Box(node.value)
+
+
+def _register_box(yaml: YAML) -> None:
+    yaml.Constructor.add_constructor("!box", _construct_box)
+
+
+def _boxed(depth: int) -> str:
+    return "k: " + "!box [" * depth + "]" * depth + "\n"
+
+
+@requires_c
+def test_a_tag_constructor_cannot_hide_depth_from_the_c_check(
+    spies: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch
+):
+    """Qodo 4370103219: a constructor that returns an object that is not a container for
+    every `!box` sequence. The depth check runs on the nodes libyaml composed, so the
+    constructed value cannot hide the nesting, and pure ruamel's answer wins."""
+    monkeypatch.setattr(yaml_util, "_default_yaml_customizers", [_register_box])
+    assert yaml_util._accepts_c_parser(new_yaml())  # pyright: ignore[reportPrivateUsage]
+    deep = _boxed(600)
+    assert isinstance(read_raw_c(deep)["k"], _Box)  # libyaml alone reads it.
+    assert (
+        outcome(from_yaml_string, deep) == outcome(read_pure, deep) == ("error", "RecursionError")
+    )
+    assert spies == {"c": [deep], "pure": [deep]}
+    shallow = _boxed(yaml_util._C_MAX_DEPTH - 1)  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(from_yaml_string(shallow)["k"], _Box)
+    assert spies["c"] == [deep, shallow] and spies["pure"] == [deep]
+
+
+@requires_c
+def test_the_depth_check_runs_before_construction():
+    constructed: list[str] = []
+
+    def construct_noting(_constructor: Any, node: Any) -> str:
+        constructed.append(node.tag)
+        return "noted"
+
+    yaml = new_yaml()
+    yaml.Constructor.add_constructor("!note", construct_noting)
+    deep = "k: !note " + "[" * 200 + "]" * 200 + "\n"
+    assert yaml_util._load_with_c(yaml, deep) is yaml_util._C_FAILED  # pyright: ignore[reportPrivateUsage]
+    assert constructed == []
+    assert yaml_util._load_with_c(yaml, "k: !note [a]\n") == {"k": "noted"}  # pyright: ignore[reportPrivateUsage]
+    assert constructed == ["!note"]
+
+
+def test_node_walk_counts_depth_and_shared_nodes():
+    walk = yaml_util._node_nested_deeper_than  # pyright: ignore[reportPrivateUsage]
+    yaml = new_yaml()
+    yaml.Parser = Parser
+
+    def compose(text: str) -> Any:
+        return yaml.compose(text)
+
+    assert not walk(compose("a: 1\n"), 1)
+    assert walk(compose("a: [1]\n"), 1) and not walk(compose("a: [1]\n"), 2)
+    assert walk(compose("- [[[x]]]\n"), 3) and not walk(compose("- [[[x]]]\n"), 4)
+    assert walk(compose("{[a]: 1}\n"), 1)  # Keys count too.
+    assert walk(compose("a: &x [1]\nb: *x\n"), 10)  # One node reached twice.
+    assert not walk(compose("- []\n- []\n- {}\n- {}\n"), 10)  # Distinct empty nodes.
+    assert not walk(compose("a: &x 1\nb: *x\n"), 10)  # A shared scalar is not a collection.
+    assert not walk(compose("x\n"), 0)
 
 
 def test_bytes_and_streams_go_to_pure_ruamel(fake_c: type[_FakeCParser]):
