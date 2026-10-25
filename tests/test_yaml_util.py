@@ -5,9 +5,20 @@ from typing import Any, cast
 
 import pytest
 from ruamel.yaml import YAML
-from ruamel.yaml.representer import RepresenterError
+from ruamel.yaml.constructor import (
+    BaseConstructor,
+    ConstructorError,
+    RoundTripConstructor,
+    SafeConstructor,
+)
+from ruamel.yaml.representer import (
+    BaseRepresenter,
+    RepresenterError,
+    RoundTripRepresenter,
+    SafeRepresenter,
+)
 
-from frontmatter_format import YamlSerializationError
+from frontmatter_format import YamlSerializationError, yaml_util
 from frontmatter_format.key_sort import custom_key_sort
 from frontmatter_format.yaml_util import (
     YamlTyp,
@@ -186,8 +197,6 @@ def test_a_later_instance_does_not_change_an_earlier_instances_key_order():
 
 
 def test_new_yaml_leaves_ruamels_shared_representer_tables_unchanged():
-    from ruamel.yaml.representer import RoundTripRepresenter, SafeRepresenter
-
     def table(cls: type) -> dict[Any, Any]:
         return dict(cast(dict[Any, Any], cls.yaml_representers))
 
@@ -198,35 +207,77 @@ def test_new_yaml_leaves_ruamels_shared_representer_tables_unchanged():
     assert {cls: table(cls) for cls in tables} == tables
 
 
-def test_concurrent_instances_with_different_policies_write_their_own_bytes():
-    """A dump on one thread is unaffected by instances other threads build meanwhile."""
-    import threading
+def test_building_an_instance_mid_dump_does_not_change_the_rest_of_the_document():
+    """The race the fix removes: a default-policy instance built partway through a dump
+    used to switch the policy of the rest of the document. One thread reproduces it."""
 
-    value: dict[str, Any] = {f"k{i}": {"null": None, "empty": {}, "n": i} for i in range(3000)}
-    expected = _dump(new_yaml(suppress_vals=lambda _value: False, typ="rt"), value)
-    stop = threading.Event()
+    class Trigger:
+        pass
 
-    def churn() -> None:
-        while not stop.is_set():
-            new_yaml(typ="rt")
+    def represent_trigger(dumper, _trigger):  # pyright: ignore
+        new_yaml(typ="rt")  # Rebuilds the default policy partway through this dump.
+        return dumper.represent_str("t")
 
-    threads = [threading.Thread(target=churn) for _ in range(2)]
-    for thread in threads:
-        thread.start()
-    try:
-        outputs = [
-            _dump(new_yaml(suppress_vals=lambda _value: False, typ="rt"), value) for _ in range(4)
-        ]
-    finally:
-        stop.set()
-        for thread in threads:
-            thread.join()
-    assert all(output == expected for output in outputs)
+    writer = new_yaml(suppress_vals=lambda _value: False, typ="rt")
+    writer.representer.add_representer(Trigger, represent_trigger)
+    value = {"a": {"x": None}, "b": Trigger(), "c": {"x": None}}
+    assert _dump(writer, value) == "a:\n  x: null\nb: t\nc:\n  x: null\n"
+
+
+class _Tagged:
+    yaml_tag: str = "!Tagged"
+    x: int
+
+    def __init__(self, x: int):
+        self.x = x
+
+    @classmethod
+    def to_yaml(cls, representer: Any, node: "_Tagged") -> Any:
+        return representer.represent_scalar(cls.yaml_tag, str(node.x))
+
+    @classmethod
+    def from_yaml(cls, _constructor: Any, node: Any) -> "_Tagged":
+        return cls(int(node.value))
+
+
+@pytest.mark.parametrize("typ", ["rt", "safe"])
+def test_constructors_registered_on_an_instance_stay_with_it(typ: YamlTyp):
+    """`register_class` registers a constructor as well as a representer; both are private."""
+
+    def table(cls: type) -> dict[Any, Any]:
+        return dict(cast(dict[Any, Any], cls.yaml_constructors))
+
+    shared = {cls: table(cls) for cls in (RoundTripConstructor, SafeConstructor)}
+    registered = new_yaml(typ=typ)
+    registered.register_class(_Tagged)
+    loaded = registered.load("!Tagged 7")
+    assert isinstance(loaded, _Tagged) and loaded.x == 7
+    assert _dump(registered, {"t": _Tagged(7)}) == "t: !Tagged 7\n"
+
+    for other in (new_yaml(typ=typ), YAML(typ=typ)):
+        if typ == "safe":
+            with pytest.raises(ConstructorError):
+                other.load("!Tagged 7")
+        else:  # The round-trip loader keeps an unknown tag as a `TaggedScalar`.
+            assert not isinstance(other.load("!Tagged 7"), _Tagged)
+    assert {cls: table(cls) for cls in shared} == shared
+
+
+@pytest.mark.parametrize("typ", ["rt", "safe", "full", "base"])
+def test_every_typ_builds(typ: YamlTyp):
+    """`typ="full"` has no constructor class to subclass; the others have both."""
+    yaml = new_yaml(typ=typ)
+    assert issubclass(yaml.Representer, BaseRepresenter)
+    if typ == "full":
+        assert yaml.Constructor is None
+    else:
+        assert issubclass(yaml.Constructor, BaseConstructor)
+        assert yaml.Constructor is not BaseConstructor
+    if typ != "base":
+        assert _dump(yaml, {"a": 1, "b": ["x"]}) == "a: 1\nb:\n- x\n"
 
 
 def test_default_representers_still_apply_to_every_new_instance(monkeypatch: pytest.MonkeyPatch):
-    from frontmatter_format import yaml_util
-
     class Point:
         x: int
 

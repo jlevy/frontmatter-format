@@ -41,14 +41,22 @@ _default_yaml_customizers: list[YamlCustomizer] = []
 
 def add_default_yaml_customizer(customizer: YamlCustomizer):
     """
-    Customize the default YAML instance by adding a function to configure it.
+    Add a function that configures every YAML instance `new_yaml` builds after this call.
+
+    There is no single default instance: the customizers run inside each later `new_yaml`
+    call, after the instance's own representers are registered. Representers and
+    constructors a customizer registers through the instance (including with
+    `register_class`) stay with that instance; ruamel's shared classes are not changed.
     """
     _default_yaml_customizers.append(customizer)
 
 
 def add_default_yaml_representer(type: type[Any], represent: Callable[[Representer, Any], Any]):
     """
-    Add a default representer for a type.
+    Add a representer for a type to every YAML instance `new_yaml` builds after this call.
+
+    This is the supported way to register a representer for every instance. A representer
+    registered on one returned instance applies to that instance only.
     """
     _default_yaml_customizers.append(lambda yaml: yaml.representer.add_representer(type, represent))
 
@@ -71,13 +79,23 @@ def new_yaml(
 
     Aliases are disabled by default so output is independent of shared Python object
     identity. Set `allow_aliases=True` to preserve aliases or serialize cyclic graphs.
+
+    Representers and constructors registered on the returned instance, including through
+    `register_class`, apply to that instance only, and ruamel's shared classes are left
+    unchanged. Use `add_default_yaml_representer` or `add_default_yaml_customizer` to
+    reach every instance built afterwards.
     """
     yaml = YAML(typ=typ)
-    # ruamel's `add_representer` is a classmethod on the representer class every instance
-    # of a `typ` shares, so registering this instance's representers there would rewrite
-    # every other instance's output, including mid-dump on another thread. A private
-    # subclass keeps them with this instance; ruamel builds the representer from it lazily.
+    # ruamel's `add_representer` and `add_constructor` are classmethods on the representer
+    # and constructor classes every instance of a `typ` shares, so registering this
+    # instance's representers there would rewrite every other instance's output, including
+    # mid-dump on another thread, and a constructor a customizer registers would reach every
+    # loader in the process. A private subclass of each keeps them with this instance;
+    # ruamel builds the representer and constructor from these lazily. (`typ="full"` has
+    # no constructor: it is for dumping only.)
     yaml.Representer = type(yaml.Representer.__name__, (yaml.Representer,), {})
+    if yaml.Constructor is not None:
+        yaml.Constructor = type(yaml.Constructor.__name__, (yaml.Constructor,), {})
     yaml.default_flow_style = False  # Block style dictionaries.
 
     suppr = suppress_vals or (lambda v: False)
