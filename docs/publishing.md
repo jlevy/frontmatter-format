@@ -90,6 +90,9 @@ The validator requires exactly one wheel and one source distribution, matching p
 versions, safe archive paths, and a minimal source payload.
 It rejects repository automation, `.tbd`, agent integrations, tests, hooks, and
 arbitrary untracked files.
+Before the release tag exists, the artifacts carry a development version derived from
+the previous tag, such as `0.4.1.dev7+5853079`; the publish workflow repeats these
+checks on the tagged checkout and requires the release version.
 
 Smoke-test installation from both artifacts:
 
@@ -100,14 +103,17 @@ for artifact in "${release_dist_dir}"/*.whl "${release_dist_dir}"/*.tar.gz; do
 done
 ```
 
-## Prepare v0.4.0 Release Notes
+## Prepare Release Notes
 
-Review the complete change set from the last release and verify that every user-visible
-change is represented in [the v0.4.0 release notes](project/releases/v0.4.0.md):
+Set the new stable tag and the last published tag, then review the complete change set
+from the last release and verify that every user-visible change is represented in the
+release notes at `docs/project/releases/vX.Y.Z.md`:
 
 ```shell
-git log v0.3.0.."${release_sha}" --oneline
-git diff --stat v0.3.0.."${release_sha}"
+version="vX.Y.Z"
+previous_version="vA.B.C"
+git log "${previous_version}..${release_sha}" --oneline
+git diff --stat "${previous_version}..${release_sha}"
 ```
 
 Release notes use `## What's Changed`, grouped feature or fix sections, bold change
@@ -115,16 +121,16 @@ titles, and a concrete compare link.
 Do not include template maintenance or internal cleanup unless it changes the user
 experience or materially improves release safety.
 
-## Publish v0.4.0
+## Publish the Release
 
 Reconfirm `release_sha`, the latest green CI run, and every blocking bead immediately
 before publication. Then create the GitHub release at that exact commit:
 
 ```shell
-gh release create v0.4.0 \
+gh release create "${version}" \
   --target "${release_sha}" \
-  --title v0.4.0 \
-  --notes-file docs/project/releases/v0.4.0.md
+  --title "${version}" \
+  --notes-file "docs/project/releases/${version}.md"
 ```
 
 Do not create, move, or reuse the tag separately.
@@ -144,9 +150,10 @@ After the workflow succeeds, verify the GitHub tag target, PyPI metadata, and an
 install from PyPI:
 
 ```shell
-test "$(git rev-list -n 1 v0.4.0)" = "${release_sha}"
-uv run --isolated --no-project --with frontmatter-format==0.4.0 python -c \
-  "from importlib.metadata import version; import frontmatter_format; assert version('frontmatter-format') == '0.4.0'"
+git fetch --tags origin
+test "$(git rev-list -n 1 "${version}")" = "${release_sha}"
+uv run --isolated --no-project --with "frontmatter-format==${version#v}" python -c \
+  "from importlib.metadata import version; import frontmatter_format; assert version('frontmatter-format') == '${version#v}'"
 ```
 
 Record the release URL, workflow URL, PyPI version, and smoke-test result in the release
