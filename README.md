@@ -265,15 +265,18 @@ If ruamel’s optional C extension, `ruamel.yaml.clib`, is installed, the reader
 libyaml wherever it is known to read a text as pure-Python ruamel does.
 libyaml implements YAML 1.1 and pure ruamel YAML 1.2, so the two disagree on some texts.
 A text with a shape on which libyaml was found to read differently (a tab, a line
-starting with `%`, NEL, LS, PS or a byte order mark, a `...` line, and a few block
-scalar, flow, anchor and tag forms) goes straight to pure ruamel, and any text libyaml
-fails on, or reads to a document nested more than 100 levels deep or using aliases, is
-read again by pure ruamel.
+starting with `%`, NEL, LS, PS or a byte order mark, a `...` line, any tag, anchor or
+alias, and a few block scalar and flow forms) goes straight to pure ruamel, and any text
+libyaml fails on, or composes to a document nested more than 100 levels deep or sharing a
+node, is read again by pure ruamel.
 The result is meant to be pure ruamel’s in every case: value, types, key order and
 errors. The list of shapes rests on a differential search over millions of generated and
-mutated documents, not on a proof, so the C parser is used only with the libyaml build
-and ruamel releases that search covered; with any other build the readers report
-`"pure"` and use pure ruamel.
+mutated documents, not on a proof, so the C parser is used only with libyaml 0.1.7 on
+ruamel.yaml 0.18 or 0.19, the build and releases that search covered; with any other
+build the readers report `"pure"` and use pure ruamel.
+Two differences that change no value remain: a warning issued while libyaml reads carries
+libyaml’s source marks, and a tag constructor registered through a customizer that raises
+runs on the libyaml attempt and again on the pure re-read.
 
 The extension is not a dependency of this package, but ruamel.yaml 0.18.x declares it as
 one on CPython, so many environments have it without asking for it.
@@ -282,14 +285,14 @@ To add it, install it in the same environment, for example with `uv add ruamel.y
 `"pure"` otherwise. Set `FRONTMATTER_FORMAT_PURE_YAML=1` to read with pure ruamel only,
 for diagnosis.
 The gain grows with document size: a few times faster on typical frontmatter blocks, more
-on large ones, and nothing on a text libyaml rejects, which is read twice.
+on large ones, and slower than pure ruamel on a text libyaml rejects, which is read twice.
 
 Writers and direct `new_yaml()` loads use ruamel’s pure-Python parser and emitter
 whether or not the extension is installed, so their output bytes and their readings do
 not depend on what else is installed.
 With the extension installed, this changes what earlier versions did: a `safe` dump wrote
-libyaml’s bytes (which escape astral characters and break lines differently), and a
-`new_yaml().load()` call used libyaml.
+libyaml’s bytes (which escape astral characters and break lines differently) at libyaml’s
+speed, and a `new_yaml().load()` call used libyaml.
 
 ## Installation
 

@@ -79,11 +79,17 @@ reads YAML C-first by default; `tests/test_c_parser.py` compares that reading wi
 pure-Python parser.
 `FRONTMATTER_FORMAT_PURE_YAML=1 uv run pytest` runs the whole suite with the pure parser,
 which is what an install without the extension gets.
-CI runs both, on every supported Python, as separate matrix entries, plus one job at the
-dependency floor (ruamel.yaml 0.18.10 with the extension).
+CI runs both, on every supported Python, as separate matrix entries (the pure entries
+install everything but the extension), plus one job at the dependency floor (ruamel.yaml
+0.18.10 with the extension, installed from the hashed `devtools/floor-requirements.txt`).
+Tests marked `slow` (the guard timing ratio) are excluded from the default run and run in
+their own CI step: `uv run pytest -m slow`.
 `devtools/yaml_parser_fuzz.py` is the larger differential search behind
-`tests/test_c_parser.py`: rerun it after a ruamel or `ruamel.yaml.clib` bump, and widen
-`CHECKED_LIBYAML_VERSION` or `CHECKED_RUAMEL_VERSIONS` in `yaml_util.py` only afterwards.
+`tests/test_c_parser.py`. Its `SEARCHED_PAIRS` lists the (ruamel.yaml, ruamel.yaml.clib)
+releases it has been run on, and `tests/test_yaml_parser_fuzz.py` fails when the installed
+pair is not listed, so after a ruamel or `ruamel.yaml.clib` bump: rerun the search on the
+new pair, add it to the list, and widen `CHECKED_LIBYAML_VERSION` or
+`CHECKED_RUAMEL_VERSIONS` in `yaml_util.py` only afterwards.
 
 ## IDE Setup
 
