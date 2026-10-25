@@ -247,19 +247,24 @@ not a container. Deeper documents are read again by pure ruamel, which then retu
 raises whatever it does at the caller's depth.
 """
 
-_C_SCAN_DEPTH = 200
+_C_SCAN_DEPTH = 150
 """Nesting the text may reach, by a cheap upper bound, beyond which it skips the C parser.
 
 ruamel's C composer recurses on the C stack, about 300 bytes per level, and a stack
 overflow there is a segfault on CPython 3.10 to 3.13 (3.14 turns it into
 `RecursionError`), before any node exists to check against `_C_MAX_DEPTH`. It overflows at
-about 30,000 levels on an 8 MB main-thread stack and at about 400 on a 128 KB thread stack,
+about 30,000 levels on an 8 MB main-thread stack, at about 400 on a 128 KB thread stack,
 which is the default on musl-based images such as `python:*-alpine` and a common setting
-for worker threads. A document whose shape allows more than this many levels (see
-`_nesting_bound`) is read by pure ruamel instead, which raises `RecursionError` where it
-cannot compose. 200 leaves a 128 KB thread about half its stack. Any document that really
-nests past `_C_MAX_DEPTH` ends with pure ruamel anyway, so the bound costs speed only on a
-document with more than two hundred flow collections in all, or indented a hundred columns.
+for worker threads, and at 165 to 201 levels on a 64 KB thread (3.10 to 3.13; on 3.14,
+whose frames are larger, the composer gives a clean `RecursionError` at 74 levels, which the
+C attempt turns into a pure re-read). A document whose shape allows more than this many
+levels (see `_nesting_bound`) is read by pure ruamel instead, which raises `RecursionError`
+where it cannot compose. 150 leaves a 64 KB thread, the smallest a program is likely to set,
+some margin on every CPython that can segfault; threads under that (CPython allows 32 KB)
+are outside this bound's assumption, and pure ruamel on 3.10 does not survive them either.
+Any document that really nests past `_C_MAX_DEPTH` ends with pure ruamel anyway, so the
+bound costs speed only on a document with more than 150 flow collections in all, or
+indented 75 columns.
 """
 
 _FLOW_OPEN = re.compile(r"(?<![^ \t\r\n\[{,:?])[\[{]")

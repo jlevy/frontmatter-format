@@ -179,7 +179,11 @@ key, where pure ruamel expects `,` or `]`: `[[]:]` is `[{(): None}]` to libyaml 
 _NODE_PROPERTY = re.compile(r"[!&*](?<![^ \t\r\n\[{,\]}?-][!&*])")
 """A tag (`!`), anchor (`&`) or alias (`*`) indicator at the start of a token: at the start
 of the text or after whitespace, a flow indicator, `?` or `-`. Anywhere else these
-characters are content to both parsers (`Tom&Jerry`, `a*b`, `Hello!`).
+characters are content to both parsers (`Tom&Jerry`, `a*b`, `Hello!`). `:` is not in the
+class on purpose: after a colon with no space, libyaml either rejects the text (in flow
+context a plain scalar may not contain `:` followed by a non-blank, so `[k:&a]` is an
+error there and the fallback covers it) or reads the colon as content (in block context
+`k:&a` is one plain scalar to both parsers), so a property can never start there.
 
 Every text with a node property or alias is read by pure ruamel. Three families were found
 one at a time where a property meets what follows it, and each was a silent difference the

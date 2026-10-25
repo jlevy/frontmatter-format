@@ -866,6 +866,12 @@ print(result[0])
 """
 
 
+PURE_RUAMEL_OVERFLOWS_SMALL_STACKS = sys.version_info.major == 3 and sys.version_info.minor < 11
+"""Python 3.10 spends C stack on every Python frame, so pure ruamel's own recursion overflows
+a 128 KB thread before the scan bound; from 3.11 Python-to-Python calls stay off the C stack.
+(Written as a runtime comparison so that the type checker does not take the branch as dead.)"""
+
+
 def _read_on_a_thread(depth: int, stack_kb: int, mode: str) -> tuple[int, str]:
     """`from_yaml_string` (or the raw C parser) on a `depth`-deep flow document, on a thread
     with a `stack_kb` stack, in a subprocess: its exit code and printed outcome. A segfault
@@ -884,20 +890,22 @@ def _read_on_a_thread(depth: int, stack_kb: int, mode: str) -> tuple[int, str]:
 @requires_c
 def test_the_c_composer_survives_the_scan_bound_on_a_small_thread_stack():
     """Review E of PR #9: the C composer overflows a 128 KB thread stack (musl's default) at
-    about 400 levels and segfaults on CPython 3.10 to 3.13, so a text the bound lets through
-    must stay well under that. Raw libyaml composes `_C_SCAN_DEPTH` levels on such a thread;
-    the reader then gives pure ruamel's answer for a document just under the bound, and the
-    same again on an 8 MB stack. Fails before the bound was lowered from 1,000."""
+    about 400 levels, and a 64 KB one at 165 to 201 (review F), and segfaults on CPython 3.10
+    to 3.13, so a text the bound lets through must stay well under that. Raw libyaml composes
+    `_C_SCAN_DEPTH` levels on a 128 KB thread; the reader then gives pure ruamel's answer for
+    a document just under the bound, and the same again on an 8 MB stack. Fails before the
+    bound was lowered from 1,000."""
     limit = yaml_util._C_SCAN_DEPTH  # pyright: ignore[reportPrivateUsage]
     assert _read_on_a_thread(limit, 128, "raw")[0] == 0
     big_stack = _read_on_a_thread(limit - 10, 8192, "pure")
     assert big_stack[0] == 0 and big_stack[1].startswith("ok")
     assert _read_on_a_thread(limit - 10, 8192, "c-first") == big_stack
     small_stack = _read_on_a_thread(limit - 10, 128, "pure")
-    if small_stack[0] != 0:
-        # Python 3.10 spends C stack on every Python frame, and pure ruamel's own recursion
-        # overflows 128 KB before the bound; the raw check above is what matters there.
-        pytest.skip(f"pure ruamel itself overflows a 128 KB stack here: exit {small_stack[0]}")
+    if PURE_RUAMEL_OVERFLOWS_SMALL_STACKS:
+        assert small_stack[0] != 0  # Expected there; a loud failure anywhere else.
+        pytest.skip(
+            "Python 3.10 spends C stack on Python frames; pure ruamel itself overflows 128 KB"
+        )
     assert _read_on_a_thread(limit - 10, 128, "c-first") == small_stack == big_stack
 
 
@@ -906,11 +914,14 @@ def test_a_document_past_the_scan_bound_on_a_small_thread_stack_raises_as_pure_d
     """600 levels on a 128 KB thread: the C composer would segfault on CPython 3.10 to 3.13
     (and did, when the bound was 1,000); the reader must answer with pure ruamel's
     `RecursionError`. On Python 3.10 pure ruamel itself overflows this stack, so the case
-    is skipped there."""
+    is skipped there, and only there."""
     pure = _read_on_a_thread(600, 128, "pure")
-    if pure[0] != 0:
-        pytest.skip(f"pure ruamel itself overflows a 128 KB stack here: exit {pure[0]}")
-    assert pure[1] == "RecursionError"
+    if PURE_RUAMEL_OVERFLOWS_SMALL_STACKS:
+        assert pure[0] != 0  # Expected there; a loud failure anywhere else.
+        pytest.skip(
+            "Python 3.10 spends C stack on Python frames; pure ruamel itself overflows 128 KB"
+        )
+    assert pure == (0, "RecursionError")
     assert _read_on_a_thread(600, 128, "c-first") == pure
 
 
