@@ -24,16 +24,26 @@ import pytest
 import ruamel.yaml.error
 import ruamel.yaml.main
 from ruamel.yaml import YAML
+from ruamel.yaml.constructor import DuplicateKeyError
 from ruamel.yaml.emitter import Emitter, RoundTripEmitter
 from ruamel.yaml.parser import Parser, RoundTripParser
 
-from frontmatter_format import fmf_read, fmf_read_frontmatter, fmf_read_frontmatter_raw, yaml_util
+from frontmatter_format import (
+    _libyaml_guard,
+    fmf_read,
+    fmf_read_frontmatter,
+    fmf_read_frontmatter_raw,
+    yaml_util,
+)
+from frontmatter_format._libyaml_guard import needs_pure_parser
 from frontmatter_format.yaml_util import (
+    CHECKED_LIBYAML_VERSION,
     add_default_yaml_customizer,
     from_yaml_string,
     new_yaml,
     read_yaml_file,
     to_yaml_string,
+    yaml_parser_mode,
 )
 
 C_PARSER: Any = getattr(ruamel.yaml.main, "CParser", None)  # noqa: B009
@@ -118,13 +128,13 @@ def spies(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[str]]:
     load_with_c = yaml_util._load_with_c  # pyright: ignore[reportPrivateUsage]
     load_pure = yaml_util._load_pure  # pyright: ignore[reportPrivateUsage]
 
-    def spy_c(text: str) -> Any:
+    def spy_c(yaml: YAML, text: str) -> Any:
         calls["c"].append(text)
-        return load_with_c(text)
+        return load_with_c(yaml, text)
 
-    def spy_pure(text: str) -> Any:
+    def spy_pure(yaml: YAML, text: Any) -> Any:
         calls["pure"].append(text)
-        return load_pure(text)
+        return load_pure(yaml, text)
 
     monkeypatch.setattr(yaml_util, "_load_with_c", spy_c)
     monkeypatch.setattr(yaml_util, "_load_pure", spy_pure)
@@ -190,6 +200,12 @@ LIBYAML_DIFFERS = {
     "explicit flow key in flow": "[?[a] :]",
     "anchor before a colon in flow": "[&a :]",
     "tag before a colon in flow": "[!!str :]",
+    "flow sequence key then colon": "[[]:]",
+    "flow sequence key then colon in a value": "k: [[a]:b]\n",
+    "flow sequence key then colon after an entry": "[a, []:x]",
+    "tagged flow sequence key then colon": "[!!seq []:x]",
+    "anchored flow sequence key then colon": "[&y []:x]",
+    "flow sequence key then colon after a marker": "--- [[a, b]:1]",
     # Anchors, tags and markers.
     "anchor name with colon": "&a: 1\n",
     "anchor on a key after a key": "a: 1\n&b: 2\n",
@@ -316,6 +332,7 @@ def fake_c(monkeypatch: pytest.MonkeyPatch) -> type[_FakeCParser]:
     """Simulate an installed extension whose parser raises a chosen exception."""
     fake = type("FakeCParser", (_FakeCParser,), {"built": 0})
     monkeypatch.setattr(yaml_util, "_CParser", fake)
+    monkeypatch.setattr(yaml_util, "_C_PARSER_CHECKED", True)
     monkeypatch.delenv(PURE_ENV, raising=False)
     return fake
 
@@ -412,6 +429,7 @@ def test_switch_values(value: str | None, mode: str, monkeypatch: pytest.MonkeyP
 
     assert PURE_YAML_ENV == PURE_ENV
     monkeypatch.setattr(yaml_util, "_CParser", _FakeCParser)
+    monkeypatch.setattr(yaml_util, "_C_PARSER_CHECKED", True)
     if value is None:
         monkeypatch.delenv(PURE_ENV, raising=False)
     else:
@@ -498,6 +516,315 @@ def test_safe_dumps_write_the_bytes_of_a_process_without_the_extension():
     stream = StringIO()
     unpinned.dump(SAFE_DUMP_VALUE, stream)
     assert stream.getvalue() != expected
+
+
+# ---- The guards are linear ---------------------------------------------------------------
+
+GUARD_GROWTH_FAMILIES: dict[str, tuple[str, str, str]] = {
+    # name: (prefix, unit repeated n times, suffix). Each unit once hung or dragged a guard.
+    "hash banner": ("", "#", "\nkey: value\n"),
+    "issue references in a comment": ("# see ", "#1, ", "\nk: v\n"),
+    "comment lines with trailing spaces": ("", "# c  \n", "k: v\n"),
+    "pipe-hash cells on one line": ("k: |\n  ", "| #n cell ", "\n"),
+    "space-only lines in a block scalar": ("k: |\n", "  x\n  \n", ""),
+    "consecutive space-only lines": ("k: |\n  x\n", "  \n", ""),
+    "space-only lines in a CR block scalar": ("k: |\r", "  x\r  \r", ""),
+    "colons after spaces": ("k: ", "a : ", "\n"),
+    "quoted scalars and colons in flow": ("k: [", "'a', b:c, ", "]\n"),
+    "anchors and tags": ("", "- &a !t x\n", ""),
+    "flow openers": ("k: ", "[a, {b: c}], ", "\n"),
+    "indicator chains": ("", "- ", "x\n"),
+}
+"""Adversarial shapes: a long `#` banner and `# see #1, #2` once took seconds to minutes in
+`_ROOT_BLOCK_SCALAR`, and `| #` cells and space-only lines made the space-line rule
+quadratic (consecutive space-only lines did so again in a first rewrite, whose backward
+search was bounded at the previous match's end). The rest cover every other guard and the
+nesting bound."""
+
+_TIMING_CODE = """
+import json, sys, time
+from frontmatter_format._libyaml_guard import needs_pure_parser
+from frontmatter_format.yaml_util import _nesting_bound
+families, sizes = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+def best(fn, text):
+    times = []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        fn(text)
+        times.append(time.perf_counter() - t0)
+    return min(times)
+out = {}
+for name, (prefix, unit, suffix) in families.items():
+    out[name] = [
+        [best(needs_pure_parser, prefix + unit * n + suffix), best(_nesting_bound, prefix + unit * n + suffix)]
+        for n in sizes
+    ]
+print(json.dumps(out))
+"""
+
+
+def _guard_times(sizes: list[int]) -> dict[str, list[list[float]]]:
+    """Best-of-5 seconds of the guard and the nesting bound on each family at each size, in a
+    subprocess with a deadline, so a guard that hangs again fails instead of hanging the
+    suite."""
+    out = subprocess.run(
+        [sys.executable, "-c", _TIMING_CODE, json.dumps(GUARD_GROWTH_FAMILIES), json.dumps(sizes)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=True,
+    )
+    return json.loads(out.stdout)
+
+
+def test_guards_take_bounded_time_on_adversarial_texts():
+    """The unfixed `_ROOT_BLOCK_SCALAR` needed over 60 s for a 40-`#` banner and 2 s for a
+    24-`#` one; these texts are far larger and must stay well under a second each."""
+    times = _guard_times([10_000])
+    slow = {name: t for name, [[t, _bound]] in times.items() if t > 1.0}
+    assert slow == {}
+
+
+def test_guards_grow_linearly_with_the_text():
+    """Ten times the text must cost well under 30 times the time (linear is about 10x;
+    quadratic is about 100x). Best of five runs on each side keeps timer noise out."""
+    times = _guard_times([20_000, 200_000])
+    ratios = {
+        name: (round(big / max(small, 1e-4), 1), round(big_bound / max(small_bound, 1e-4), 1))
+        for name, [[small, small_bound], [big, big_bound]] in times.items()
+    }
+    superlinear = {name: r for name, r in ratios.items() if r[0] >= 30 or r[1] >= 30}
+    assert superlinear == {}, ratios
+
+
+def test_a_space_only_line_routes_only_after_a_block_scalar_header():
+    check = _libyaml_guard._block_scalar_before_space_line  # pyright: ignore[reportPrivateUsage]
+    assert check("k: |\n \n  a\n")
+    assert check("k: >-  \n \n  a\n")
+    assert check("k: | # c\n \n  a\n")
+    assert check("k: |\r \r  a\r")
+    assert check("a: 1\r\nk: |\r\n \r\n  a\r\n")
+    assert not check("k: |\n  x\n  \n  y\n")  # The line before the space line is content.
+    assert not check("k: | #c\n  x\n  \n  \n")  # A header two lines up is not the line before.
+    assert not check("k: v  \n \n")  # No header.
+    assert not check("k: |\n ")  # The space line is not terminated.
+
+
+@requires_c
+def test_a_pipe_inside_a_leading_comment_no_longer_routes(spies: dict[str, list[str]]):
+    text = "# usage: a | b > c\nk: v\n"
+    assert from_yaml_string(text) == {"k": "v"}
+    assert spies == {"c": [text], "pure": []}
+
+
+# ---- Deep nesting never reaches the C composer -----------------------------------------
+
+
+def _deep_text(shape: str, depth: int) -> str:
+    if shape == "flow":
+        return "k: " + "[" * depth + "]" * depth + "\n"
+    if shape == "flowmap":
+        return "k: " + "{a: " * depth + "1" + "}" * depth + "\n"
+    if shape == "dash":
+        return "- " * depth + "x\n"
+    assert shape == "question"
+    return "? " * depth + "x\n"
+
+
+def test_nesting_bound_is_an_upper_bound_and_small_on_ordinary_documents():
+    bound = yaml_util._nesting_bound  # pyright: ignore[reportPrivateUsage]
+    assert bound(_deep_text("flow", 50)) >= 50
+    assert bound(_deep_text("flowmap", 50)) >= 50
+    assert bound(_deep_text("dash", 50)) >= 50
+    assert bound(_deep_text("question", 50)) >= 50
+    assert bound("- - - - a: [b, {c: d}]\n  - - x\n") >= 8
+    assert bound("".join(" " * i + "- \n" for i in range(30)) + " " * 30 + "x\n") >= 30
+    assert bound("a:\n- b:\n  - c:\n    - d: 1\n") >= 7
+    assert bound("k: a[b[c[d # x[\nurl: http://x/[1]\n") == 2  # Brackets inside words are content.
+    assert all(bound(text) < 20 for text in ORDINARY)
+    limit = yaml_util._C_SCAN_DEPTH  # pyright: ignore[reportPrivateUsage]
+    assert bound("k: [a]\n" * (limit // 2)) <= limit  # Wide, not deep: stays on libyaml.
+
+
+@requires_c
+@pytest.mark.parametrize("shape", ["flow", "flowmap", "dash", "question"])
+def test_texts_that_may_nest_past_the_scan_bound_skip_the_c_parser(
+    shape: str, spies: dict[str, list[str]]
+):
+    text = _deep_text(shape, yaml_util._C_SCAN_DEPTH + 200)  # pyright: ignore[reportPrivateUsage]
+    assert (
+        outcome(from_yaml_string, text) == outcome(read_pure, text) == ("error", "RecursionError")
+    )
+    assert spies == {"c": [], "pure": [text]}
+
+
+@requires_c
+@pytest.mark.parametrize(
+    ("shape", "depth"),
+    [
+        ("flow", 30_000),
+        ("flowmap", 30_000),
+        ("dash", 40_000),
+        ("question", 40_000),
+        ("flow", 100_000),
+    ],
+)
+def test_nesting_past_the_c_stack_raises_as_pure_ruamel_does_instead_of_crashing(
+    shape: str, depth: int
+):
+    """ruamel's C composer segfaults at about 30,000 levels on an 8 MB stack (measured here
+    for the raw C parser on these shapes); the readers must answer with pure ruamel's
+    `RecursionError`. Run in a subprocess so that a crash is a failure, not a lost run."""
+    code = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
+        "from test_c_parser import _deep_text\n"
+        "from frontmatter_format import from_yaml_string, yaml_parser_mode\n"
+        "assert yaml_parser_mode() == 'c-first'\n"
+        "try:\n"
+        f"    from_yaml_string(_deep_text({shape!r}, {depth}))\n"
+        "    print('ok')\n"
+        "except RecursionError:\n"
+        "    print('RecursionError')\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=300, check=False
+    )
+    assert out.returncode == 0, out.stderr[-500:]
+    assert out.stdout.strip() == "RecursionError"
+
+
+# ---- One instance per read, left clean by the C attempt --------------------------------
+
+
+@requires_c
+@pytest.mark.parametrize(
+    "text",
+    [
+        ORDINARY[0],
+        NATURAL_C_FAILURES["flow colon (libyaml ScannerError)"],
+        LIBYAML_DIFFERS["tab after a value"],
+        _nested(120),
+    ],
+    ids=["libyaml reads it", "libyaml fails", "routed", "deep value discarded"],
+)
+def test_default_customizers_run_once_per_read(text: str, monkeypatch: pytest.MonkeyPatch):
+    calls: list[int] = []
+    counting: list[Callable[[YAML], None]] = [lambda _yaml: calls.append(1)]
+    monkeypatch.setattr(yaml_util, "_default_yaml_customizers", counting)
+    outcome(from_yaml_string, text)
+    assert calls == [1]
+
+
+@requires_c
+def test_a_stateful_customizer_sees_one_instance_per_read(monkeypatch: pytest.MonkeyPatch):
+    """Qodo's case: a customizer that toggles `allow_duplicate_keys` on each call. The pure
+    re-read uses the instance the C attempt used, so one pure load and the reader agree."""
+    state = {"calls": 0}
+
+    def toggling(yaml: YAML) -> None:
+        state["calls"] += 1
+        yaml.allow_duplicate_keys = state["calls"] % 2 == 0
+
+    monkeypatch.setattr(yaml_util, "_default_yaml_customizers", [toggling])
+    text = "a: [http://x]\na: 2\n"  # libyaml fails on the flow colon; pure re-reads.
+    with pytest.raises(DuplicateKeyError):
+        from_yaml_string(text)
+    assert state["calls"] == 1
+
+
+@requires_c
+def test_a_failed_c_attempt_leaves_the_instance_as_it_was():
+    yaml = new_yaml()
+    before = dict(vars(yaml))
+    text = NATURAL_C_FAILURES["flow colon (libyaml ScannerError)"]
+    failed = yaml_util._load_with_c(yaml, text)  # pyright: ignore[reportPrivateUsage]
+    assert failed is yaml_util._C_FAILED  # pyright: ignore[reportPrivateUsage]
+    assert set(vars(yaml)) == set(before) and yaml.Parser is Parser
+    assert yaml.load(text) == read_pure(text) == {"sources": ["https://example.com/a"]}
+
+
+@requires_c
+def test_a_kept_c_reading_leaves_the_instance_reusable():
+    yaml = new_yaml()
+    assert yaml_util._load_with_c(yaml, ORDINARY[0]) == read_pure(ORDINARY[0])  # pyright: ignore[reportPrivateUsage]
+    assert yaml.Parser is Parser
+    assert yaml.load(ORDINARY[1]) == read_pure(ORDINARY[1])
+
+
+def test_accepts_the_c_parser_on_a_handle_without_max_depth():
+    """ruamel.yaml 0.18 has no `YAML.max_depth`; the check must read it with a default."""
+    yaml = new_yaml()
+    if hasattr(yaml, "max_depth"):
+        delattr(yaml, "max_depth")
+    assert yaml_util._accepts_c_parser(yaml)  # pyright: ignore[reportPrivateUsage]
+    yaml.max_depth = 5
+    assert not yaml_util._accepts_c_parser(yaml)  # pyright: ignore[reportPrivateUsage]
+
+
+@requires_c
+def test_shared_empty_tuples_are_not_taken_for_aliases(spies: dict[str, list[str]]):
+    text = "- {[]: a}\n- {[]: b}\n"  # Both keys are CPython's one empty tuple.
+    assert outcome(from_yaml_string, text) == outcome(read_pure, text)
+    assert spies == {"c": [text], "pure": []}
+
+
+def test_bytes_and_streams_go_to_pure_ruamel(fake_c: type[_FakeCParser]):
+    """ruamel reads bytes and streams too; they bypass the guard and the C attempt."""
+    assert from_yaml_string(cast(Any, b"a: 1\n")) == {"a": 1}
+    assert from_yaml_string(cast(Any, StringIO("a: 1\n"))) == {"a": 1}
+    assert fake_c.built == 0
+
+
+@requires_c
+def test_bytes_and_streams_read_the_same_with_the_extension(spies: dict[str, list[str]]):
+    assert from_yaml_string(cast(Any, b"a: 1\n")) == {"a": 1}
+    assert from_yaml_string(cast(Any, StringIO("a: 1\n"))) == {"a": 1}
+    assert spies["c"] == [] and len(spies["pure"]) == 2
+
+
+# ---- The build gate ----------------------------------------------------------------------
+
+
+def test_the_c_parser_counts_as_checked_only_for_the_derived_build_and_releases(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    checked = yaml_util._ruamel_is_checked  # pyright: ignore[reportPrivateUsage]
+    assert checked((0, 18, 10)) and checked((0, 19, 1)) and checked((0, 19, 99))
+    assert not checked((0, 17, 40)) and not checked((0, 20, 0)) and not checked((1, 0, 0))
+
+    monkeypatch.setattr(yaml_util, "_installed_libyaml_version", lambda: CHECKED_LIBYAML_VERSION)
+    assert yaml_util._c_parser_is_checked() is checked(ruamel.yaml.version_info)  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(yaml_util, "_installed_libyaml_version", lambda: "0.2.5")
+    assert not yaml_util._c_parser_is_checked()  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(yaml_util, "_installed_libyaml_version", lambda: None)
+    assert not yaml_util._c_parser_is_checked()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_no_libyaml_version_without_the_extension(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(yaml_util, "_CParser", None)
+    assert yaml_util._installed_libyaml_version() is None  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(yaml_util, "_CParser", _FakeCParser)  # A class without a C module.
+    assert yaml_util._installed_libyaml_version() is None  # pyright: ignore[reportPrivateUsage]
+
+
+@requires_c
+def test_the_installed_extension_is_the_checked_build():
+    """CI installs the extension; a clib release with another libyaml must fail here, so that
+    the search behind the guards is rerun before the gate is widened."""
+    assert yaml_util._installed_libyaml_version() == CHECKED_LIBYAML_VERSION  # pyright: ignore[reportPrivateUsage]
+    assert yaml_util._C_PARSER_CHECKED  # pyright: ignore[reportPrivateUsage]
+    assert yaml_parser_mode() == "c-first"
+
+
+@requires_c
+def test_an_unchecked_build_reports_pure_and_keeps_libyaml_out(
+    spies: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(yaml_util, "_C_PARSER_CHECKED", False)
+    assert yaml_parser_mode() == "pure"
+    assert from_yaml_string(ORDINARY[0]) == read_pure(ORDINARY[0])
+    assert spies == {"c": [], "pure": [ORDINARY[0]]}
 
 
 # ---- Equivalence sweep -------------------------------------------------------------------
@@ -593,8 +920,6 @@ def test_c_first_pure_switch_and_independent_pure_reading_agree_on_every_text(
     assert differing == []
     assert switched == independent
     # The corpus exercises libyaml, not just the guards: most texts are read by it.
-    from frontmatter_format._libyaml_guard import needs_pure_parser
-
     assert sum(not needs_pure_parser(text) for text in corpus) > len(corpus) // 2
 
 

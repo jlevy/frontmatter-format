@@ -6,11 +6,14 @@ convenience functions.
 from __future__ import annotations
 
 import os
+import re
+import sys
 from collections.abc import Callable, Iterable
 from io import StringIO
 from pathlib import Path
 from typing import Any, Literal, TextIO, cast
 
+import ruamel.yaml
 import ruamel.yaml.main
 from ruamel.yaml import YAML, Representer
 from ruamel.yaml.composer import Composer
@@ -180,6 +183,57 @@ Taken from `ruamel.yaml.main` so that it is the very object ruamel compares a YA
 instance's `Parser` with when it picks its C loading path.
 """
 
+CHECKED_LIBYAML_VERSION = "0.1.7"
+"""The libyaml build, as `ruamel.yaml.clib` reports it, that the guards were derived for.
+
+The guards in `_libyaml_guard` are empirical: they list the shapes on which this libyaml
+accepts what pure ruamel rejects, or reads a different value. Another libyaml build could
+add a shape, so the C parser is used only when it is this build on a checked ruamel
+release (`CHECKED_RUAMEL_VERSIONS`), and `yaml_parser_mode` reports `"pure"` otherwise.
+Every `ruamel.yaml.clib` release so far reports this string, so a new clib release needs
+`devtools/yaml_parser_fuzz.py` rerun even when the string is unchanged. Widen either
+constant only after rerunning that search and `tests/test_c_parser.py` on the new build.
+softschema gates its own copy of the guards on the same two values.
+"""
+
+CHECKED_RUAMEL_VERSIONS = ((0, 18), (0, 20))
+"""The ruamel.yaml releases the guards were searched against: from the first (inclusive)
+to the second (exclusive), as `(major, minor)`.
+
+The pure parser is the reference the guards compare libyaml with, so it moves too: a
+ruamel release that changes what pure ruamel accepts changes which texts need a guard.
+"""
+
+
+def _ruamel_is_checked(version: tuple[int, ...] = ruamel.yaml.version_info) -> bool:
+    """Whether `version` of ruamel.yaml is inside `CHECKED_RUAMEL_VERSIONS`."""
+    lower, upper = CHECKED_RUAMEL_VERSIONS
+    return lower <= tuple(version[:2]) < upper
+
+
+def _installed_libyaml_version() -> str | None:
+    """The libyaml version the installed C parser reports, or None without a C parser.
+
+    `CParser.__module__` is `ruamel.yaml.clib._ruamel_yaml` on recent clib releases and
+    `_ruamel_yaml` on older ones; ruamel itself imports the latter name, so it is the
+    fallback when the qualified name is not registered.
+    """
+    if _CParser is None:
+        return None
+    module = sys.modules.get(_CParser.__module__) or sys.modules.get("_ruamel_yaml")
+    get_version_string = getattr(module, "get_version_string", None)
+    version = get_version_string() if callable(get_version_string) else None
+    return version if isinstance(version, str) else None
+
+
+def _c_parser_is_checked() -> bool:
+    """Whether ruamel found a C parser, and it is the build the guards were derived for."""
+    return _installed_libyaml_version() == CHECKED_LIBYAML_VERSION and _ruamel_is_checked()
+
+
+_C_PARSER_CHECKED: bool = _c_parser_is_checked()
+"""Whether the readers may use the C parser at all, decided once at import."""
+
 _C_MAX_DEPTH = 100
 """Deepest nesting of collections for which a C reading is kept.
 
@@ -187,6 +241,51 @@ Pure ruamel composes nodes recursively and raises `RecursionError` at about 490 
 under Python's default recursion limit, where libyaml reads on. Deeper values are read
 again by pure ruamel, which then returns or raises whatever it does at the caller's depth.
 """
+
+_C_SCAN_DEPTH = 1000
+"""Nesting the text may reach, by a cheap upper bound, beyond which it skips the C parser.
+
+ruamel's C composer recurses on the C stack and segfaults at about 30,000 nested
+collections under an 8 MB stack, before any value exists to check against `_C_MAX_DEPTH`.
+A document whose shape allows more than this many levels (see `_nesting_bound`) is read
+by pure ruamel instead, which raises `RecursionError` where it cannot compose. At about
+270 bytes of C stack per level, this bound also leaves room on smaller thread stacks.
+Any document that really nests past `_C_MAX_DEPTH` ends with pure ruamel anyway, so the
+bound costs speed only on a document with more than a thousand flow collections in all.
+"""
+
+_FLOW_OPEN = re.compile(r"(?<![^ \t\r\n\[{,:?])[\[{]")
+"""A `[` or `{` where libyaml can open a flow collection: at the start of the text or
+after whitespace, another flow indicator, a colon or a `?`.
+
+Anywhere else, such as inside a plain scalar (`a[b`) or right after a quote, a tag, an
+anchor or a closing bracket, libyaml either reads it as content or rejects the text, so
+the count is an upper bound on the flow nesting depth.
+"""
+
+_INDICATOR_CHAIN = re.compile(r"(?:[-?] +)+")
+"""A run of `- ` and `? ` indicators on one line, each of which opens a block collection."""
+
+_LINE_INDENT = re.compile(r"(?<![^\r\n]) +")
+"""The spaces that indent a line."""
+
+
+def _nesting_bound(text: str) -> int:
+    """
+    A cheap upper bound on how deep the document in `text` can nest collections.
+
+    Flow collections need an opener each (`_FLOW_OPEN`). Block collections are opened on
+    one line by a chain of indicators (`- - - x`) or on a new line by indentation; every
+    level opened by indentation costs at least one more column, except a sequence written
+    at its parent key's indentation, so one column opens at most two levels.
+    """
+    flow = len(_FLOW_OPEN.findall(text))
+    chain = max(
+        (run.count("-") + run.count("?") for run in _INDICATOR_CHAIN.findall(text)), default=0
+    )
+    indent = max((len(run) for run in _LINE_INDENT.findall(text)), default=0)
+    return flow + chain + 2 * indent + 2
+
 
 _LOADER_ATTRS = ("_reader", "_scanner", "_parser", "_composer", "_constructor", "_resolver")
 
@@ -196,11 +295,15 @@ def yaml_parser_mode() -> Literal["c-first", "pure"]:
     Which ruamel parser `from_yaml_string`, `read_yaml_file` and the frontmatter readers
     use in this process.
 
-    `"c-first"` means ruamel's C extension (`ruamel.yaml.clib`) is installed and not turned
-    off with `FRONTMATTER_FORMAT_PURE_YAML`: libyaml reads each text that has none of the
-    shapes on which it was found to differ from pure ruamel, and pure ruamel reads the rest
-    and every text libyaml fails on. `"pure"` means every text is read by pure ruamel.
-    Results are the same in both modes; only speed differs.
+    `"c-first"` means ruamel's C extension (`ruamel.yaml.clib`) is installed, is the
+    libyaml build the guards were checked against on a checked ruamel release
+    (`CHECKED_LIBYAML_VERSION`, `CHECKED_RUAMEL_VERSIONS`), and is not turned off with
+    `FRONTMATTER_FORMAT_PURE_YAML`: libyaml reads each text that has none of the shapes on
+    which it was found to differ from pure ruamel, and pure ruamel reads the rest and every
+    text libyaml fails on. `"pure"` means every text is read by pure ruamel: the extension
+    is absent, is another build or release, or is turned off. The build check happens once
+    at import; the environment variable is read on every call. Results are the same in
+    both modes; only speed differs.
 
     A default customizer that replaces or configures the loader (see `_accepts_c_parser`)
     keeps every text on pure ruamel even when this reports `"c-first"`.
@@ -209,46 +312,65 @@ def yaml_parser_mode() -> Literal["c-first", "pure"]:
 
 
 def _c_parser_active() -> bool:
-    return _CParser is not None and os.environ.get(PURE_YAML_ENV, "") in ("", "0")
+    return (
+        _CParser is not None
+        and _C_PARSER_CHECKED
+        and os.environ.get(PURE_YAML_ENV, "") in ("", "0")
+    )
 
 
-def _load_yaml_text(text: str) -> Any:
+def _load_yaml_text(text: Any) -> Any:
     """
     Load one YAML document exactly as pure ruamel reads it with `new_yaml()`.
 
-    With the C extension active, a text without any shape from `needs_pure_parser` is read
-    by libyaml first. If that attempt raises anything at all, or yields a value pure ruamel
-    might not, the text is read again by pure ruamel and whatever that returns or raises is
-    the result.
+    With the C extension active, a `str` without any shape from `needs_pure_parser`, and
+    whose shape cannot nest past `_C_SCAN_DEPTH`, is read by libyaml first. If that attempt
+    raises anything at all, or yields a value pure ruamel might not, the text is read again
+    by pure ruamel, with the same instance, and whatever that returns or raises is the
+    result. Bytes and streams, which ruamel also reads, go to pure ruamel directly.
     """
-    if _c_parser_active() and not needs_pure_parser(text):
-        value = _load_with_c(text)
+    yaml = new_yaml()
+    if (
+        isinstance(text, str)
+        and _c_parser_active()
+        and _accepts_c_parser(yaml)
+        and not needs_pure_parser(text)
+        and _nesting_bound(text) <= _C_SCAN_DEPTH
+    ):
+        value = _load_with_c(yaml, text)
         if value is not _C_FAILED:
             return value
-    return _load_pure(text)
+    return _load_pure(yaml, text)
 
 
 _C_FAILED: Any = object()
 """What `_load_with_c` returns when the C reading cannot be used."""
 
 
-def _load_with_c(text: str) -> Any:
-    """libyaml's reading of `text` through `new_yaml()`'s loader, or `_C_FAILED`."""
-    yaml = new_yaml()
-    if not _accepts_c_parser(yaml):
-        return _C_FAILED
+def _load_with_c(yaml: YAML, text: str) -> Any:
+    """
+    libyaml's reading of `text` through `yaml`, an instance `_accepts_c_parser` cleared, or
+    `_C_FAILED`. Either way `yaml` is left as it was, ready for a pure reading: ruamel's C
+    loading path hangs its combined loader and the stream on the instance, and the pure
+    path would pick that loader up as its scanner.
+    """
+    before = set(vars(yaml))
     yaml.Parser = _CParser
     try:
         value = yaml.load(text)
     except Exception:
         return _C_FAILED
+    finally:
+        yaml.Parser = Parser
+        for attr in set(vars(yaml)) - before:
+            delattr(yaml, attr)
     if _nested_deeper_than(value, _C_MAX_DEPTH):
         return _C_FAILED
     return value
 
 
-def _load_pure(text: str) -> Any:
-    return new_yaml().load(text)
+def _load_pure(yaml: YAML, text: Any) -> Any:
+    return yaml.load(text)
 
 
 def _accepts_c_parser(yaml: YAML) -> bool:
@@ -257,15 +379,17 @@ def _accepts_c_parser(yaml: YAML) -> bool:
 
     ruamel's C loader replaces the reader, scanner, parser and composer and builds its own
     constructor and resolver objects, so a customizer that replaced or configured any of
-    those, or set a version or a depth limit, keeps the pure parser.
+    those, or set a version or a depth limit, keeps the pure parser. The attributes are
+    read with defaults because they differ between ruamel releases: 0.18 has no
+    `max_depth`.
     """
     return (
         yaml.Parser is Parser
         and yaml.Composer is Composer
         and yaml.Reader is None
         and yaml.Scanner is None
-        and yaml.version is None
-        and not yaml.max_depth
+        and getattr(yaml, "version", None) is None
+        and not getattr(yaml, "max_depth", 0)
         and not any(hasattr(yaml, attr) for attr in _LOADER_ATTRS)
     )
 
@@ -275,8 +399,10 @@ _CONTAINERS = (dict, list, tuple, set, frozenset)
 
 def _nested_deeper_than(value: Any, limit: int) -> bool:
     """
-    Whether `value` nests collections more than `limit` deep, or reaches one collection
-    twice, as an alias does. Either sends the text back to pure ruamel.
+    Whether `value` nests collections more than `limit` deep, or reaches one non-empty
+    collection twice, as an alias does. Either sends the text back to pure ruamel. Empty
+    collections are skipped: CPython shares one empty tuple, so `{[]: a}` twice would
+    otherwise look like an alias, and an empty collection has nothing below it.
     """
     if not isinstance(value, _CONTAINERS):
         return False
@@ -288,6 +414,8 @@ def _nested_deeper_than(value: Any, limit: int) -> bool:
             return True
         below: list[Any] = []
         for node in level:
+            if not node:
+                continue
             if id(node) in seen:
                 return True
             seen.add(id(node))

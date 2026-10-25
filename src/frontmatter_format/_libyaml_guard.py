@@ -8,11 +8,30 @@ resolution stay in ruamel's Python code. When libyaml raises, the text is read a
 pure ruamel, so texts libyaml *rejects* need no guard. These guards cover the other
 direction, which no fallback can see: libyaml accepting a text pure ruamel rejects, or
 reading it to a different value. Each family was found by comparing the two parsers over
-generated and mutated documents through this library's own loader, and each is pinned
-by a test in `tests/test_c_parser.py`.
+generated and mutated documents through this library's own loader
+(`devtools/yaml_parser_fuzz.py` is that search), and each is pinned by a test in
+`tests/test_c_parser.py`.
 
-Every check is a substring test or a search that starts at a literal character, so the
-guard costs a small fraction of a C parse.
+Every check is a substring test or a single pass over the text. The regexes start at a
+literal character and skip ahead between candidates, and none of them can match a
+stretch of text in more than one way, so Python's backtracking engine never retries a
+split: the cost is linear in the text, and `tests/test_c_parser.py` pins bounded time and
+linear growth on adversarial inputs (a long `#` banner, hundreds of comment lines with
+trailing spaces, a line of thousands of `| #`, a block scalar with tens of thousands of
+space-only lines). Python 3.10, which this package supports, has no possessive
+quantifiers or atomic groups, so unambiguity comes from lookarounds and from searching
+each candidate line separately instead.
+
+softschema (`softschema/_portable.py`) carries the same guards for its own reader. The
+two agree on every shared family: the tab, NEL/LS/PS/BOM, `%` directive line, `...`
+line, `|#` header, space-line, root block scalar and quoted-colon rules are the same
+rules (softschema writes them with Python 3.11 possessive quantifiers). This module has
+more families, because this loader keeps tags, anchors, aliases and non-string keys,
+which softschema's preflight and value check reject on both paths: the flow `?` and
+token-colon rules, the anchor-name rule, the empty `!` rule, and tag or anchor prefixes
+on a root block scalar. softschema alone routes a colon after a space in block context
+(`a: x :y`), which libyaml rejects, so here the fallback covers it. Any new family found
+in one must be ported to the other.
 """
 
 from __future__ import annotations
@@ -47,23 +66,68 @@ stream.
 _BLOCK_HEADER_COMMENT = re.compile(r"#(?:(?<=[|>]#)|(?<=[|>][-+0-9]#)|(?<=[|>][-+0-9]{2}#))")
 """A block scalar header with a comment and no space before it, such as `|#`.
 
-Pure ruamel rejects it; libyaml reads the comment.
+Pure ruamel rejects it; libyaml reads the comment. A header has at most two indicator
+characters; libyaml rejects a longer one too.
 """
 
-_BLOCK_SPACE_LINE = re.compile(r"[|>][-+0-9]*(?: +#[^\r\n]*| *)(?:\r\n?|\n) +(?:\r\n?|\n)")
-"""A block scalar header followed by a line of only spaces.
+_SPACE_ONLY_LINE = re.compile(r"(?:\r\n?|\n)( +)(?=[\r\n])")
+"""A line of only spaces, which is where a block scalar can read differently (below).
 
-When such a line has fewer spaces than a later leading line, pure ruamel reports "more
-indented follow up line than first in a block scalar"; libyaml reads the scalar.
+The search finds these lines first and then looks at the line before each one. Such lines
+are not rare: an editor that keeps indentation on blank lines writes one for every blank
+line inside a literal block, so the work per line has to stay constant
+(see `_block_scalar_before_space_line`).
 """
+
+_BLOCK_HEADER_AT_LINE_END = re.compile(r"[|>][-+0-9]{0,2}(?: +#| *\Z)")
+"""A block scalar header ending a line: `|` or `>`, up to two indicator characters, then
+only spaces, or a space and a comment. Searched within one line, so `\\Z` is its end.
+
+Each `|` or `>` costs only the spaces after it, never the rest of the line, which keeps a
+line full of `| #` linear.
+"""
+
+
+def _block_scalar_before_space_line(text: str) -> bool:
+    """
+    Whether a block scalar header is followed by a line of only spaces.
+
+    When such a line has fewer spaces than a later leading line, pure ruamel reports "more
+    indented follow up line than first in a block scalar"; libyaml reads the scalar.
+
+    The backward search for the start of the line before each match is bounded below by the
+    start of the previous match, the line break that ended the line before it, so each
+    space-only line costs the length of the one line before it. Searching from 0 instead
+    made the whole text quadratic in the number of space-only lines: in an LF-only text
+    the search for `\\r` found nothing and scanned back to the start every time. Bounding
+    at the previous match's *end* has the same effect on consecutive space-only lines (the
+    next match starts exactly there, so the bounded search finds no break and falls back
+    to 0), and also let a header several lines up count as the line before.
+    """
+    low = 0
+    for match in _SPACE_ONLY_LINE.finditer(text):
+        line_end = match.start()
+        line_start = max(text.rfind("\n", low, line_end), text.rfind("\r", low, line_end)) + 1
+        if _BLOCK_HEADER_AT_LINE_END.search(text, line_start, line_end) is not None:
+            return True
+        low = line_end
+    return False
+
 
 _ROOT_BLOCK_SCALAR = re.compile(
-    r"(?:[ \r\n]|#[^\r\n]*|(?:---|\.\.\.)(?=[ \r\n]|\Z))*(?:[!&][^ \r\n]*[ ]+)*[|>]"
+    r"(?:[ \r\n]|#[^\r\n]*(?![^\r\n])|(?:---|\.\.\.)(?=[ \r\n]|\Z))*(?:[!&][^ \r\n]*[ ]+)*[|>]"
 )
 """A document that may be a block scalar, after any blank lines, comments and markers.
 
 Its content may start at column zero, where libyaml reads a `#` line as a comment and pure
 ruamel reads it as content.
+
+The lookahead after a comment, `(?![^\\r\\n])`, lets it end only at a line break, so the
+repetition has exactly one way to consume each line. Without it, the engine could stop a
+comment at any `#` or space and, on an ordinary document, tried every split before
+failing, doubling the cost with each `#` of a leading banner comment. One consequence: a
+`|` or `>` inside a comment is part of the comment, as it should be, and no longer routes
+the text to pure ruamel.
 """
 
 _SPACED_COLON = re.compile(r":(?<=[ \"']:)(?![ \r\n])")
@@ -99,13 +163,16 @@ libyaml take the next `]` as the end of the pair, so it reads `[? ]]`, which pur
 refuses.
 """
 
-_FLOW_TOKEN_COLON = re.compile(r":(?<=[ \[{,\r\n]:)(?![ \r\n])")
-"""A colon at the start of a token and before anything but a space or line break, checked
-in texts with a flow collection.
+_FLOW_TOKEN_COLON = re.compile(r":(?<=[ \[{,\r\n\]}]:)(?![ \r\n])")
+"""A colon at the start of a token, or right after a flow collection, and before anything
+but a space or line break, checked in texts with a flow collection.
 
 Inside a flow collection libyaml always reads such a colon as a value indicator; pure ruamel
 reads it as a value indicator only after a key, and otherwise as the start of a plain
 scalar. So `[&a :]` is `[":"]` to pure ruamel and a list holding one empty pair to libyaml.
+After a flow collection the colon makes libyaml read a single-pair mapping with a tuple
+key, where pure ruamel expects `,` or `]`: `[[]:]` is `[{(): None}]` to libyaml and a
+`ParserError` to pure ruamel, and so are `k: [[a]:b]` and `[a, []:x]`.
 """
 
 _ANCHOR_NAME_END = re.compile(r"[&*](?<![^ \r\n\[{,?:-][&*])[0-9A-Za-z_-]+[?:%@`]")
@@ -141,7 +208,7 @@ def needs_pure_parser(text: str) -> bool:
         return True
     if "#" in text and _BLOCK_HEADER_COMMENT.search(text) is not None:
         return True
-    if (" \n" in text or " \r" in text) and _BLOCK_SPACE_LINE.search(text) is not None:
+    if (" \n" in text or " \r" in text) and _block_scalar_before_space_line(text):
         return True
     if _has_quoted_key_colon(text):
         return True
