@@ -54,6 +54,9 @@ build = [
 ]
 dev = [
     "pytest>=9.1.1",
+    # ruamel's optional C extension, so the suite reads YAML C-first and
+    # tests/test_c_parser.py compares that with the pure-Python parser.
+    "ruamel.yaml.clib>=0.2.15; platform_python_implementation == 'CPython'",
     "pytest-sugar>=1.1.1",
     "ruff>=0.15.20",
     "codespell>=2.4.2",

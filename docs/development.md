@@ -72,6 +72,19 @@ source .venv/bin/activate
 
 See [uv docs](https://docs.astral.sh/uv/) for details.
 
+## Testing the YAML Parsers
+
+The dev group installs ruamel’s optional C extension (`ruamel.yaml.clib`), so the suite
+reads YAML C-first by default; `tests/test_c_parser.py` compares that reading with the
+pure-Python parser.
+`FRONTMATTER_FORMAT_PURE_YAML=1 uv run pytest` runs the whole suite with the pure parser,
+which is what an install without the extension gets.
+CI runs both, on every supported Python, as separate matrix entries, plus one job at the
+dependency floor (ruamel.yaml 0.18.10 with the extension).
+`devtools/yaml_parser_fuzz.py` is the larger differential search behind
+`tests/test_c_parser.py`: rerun it after a ruamel or `ruamel.yaml.clib` bump, and widen
+`CHECKED_LIBYAML_VERSION` or `CHECKED_RUAMEL_VERSIONS` in `yaml_util.py` only afterwards.
+
 ## IDE Setup
 
 If you use VSCode or a fork like Cursor or Windsurf, you can install the following

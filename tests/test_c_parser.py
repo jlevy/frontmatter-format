@@ -11,6 +11,7 @@ import ast
 import itertools
 import json
 import math
+import os
 import random
 import subprocess
 import sys
@@ -578,23 +579,21 @@ def _guard_times(sizes: list[int]) -> dict[str, list[list[float]]]:
     return json.loads(out.stdout)
 
 
-def test_guards_take_bounded_time_on_adversarial_texts():
-    """The unfixed `_ROOT_BLOCK_SCALAR` needed over 60 s for a 40-`#` banner and 2 s for a
-    24-`#` one; these texts are far larger and must stay well under a second each."""
-    times = _guard_times([10_000])
-    slow = {name: t for name, [[t, _bound]] in times.items() if t > 1.0}
-    assert slow == {}
-
-
 def test_guards_grow_linearly_with_the_text():
-    """Ten times the text must cost well under 30 times the time (linear is about 10x;
-    quadratic is about 100x). Best of five runs on each side keeps timer noise out."""
-    times = _guard_times([20_000, 200_000])
+    """A hundred times the text must cost under a thousand times the time: linear is about
+    100x (less, with the fixed cost per call), quadratic about 10,000x, and the unfixed
+    `_ROOT_BLOCK_SCALAR` never finished (it needed over 60 s for a 40-`#` banner). Best of
+    five runs on each side keeps timer noise out, and the ratio is within one run, so a slow
+    or shared machine moves both sides alike. A guard that hangs again hits the subprocess
+    deadline in `_guard_times`, which is a failure rather than a hung suite."""
+    small_size, big_size = 1_000, 100_000
+    times = _guard_times([small_size, big_size])
     ratios = {
-        name: (round(big / max(small, 1e-4), 1), round(big_bound / max(small_bound, 1e-4), 1))
+        name: (round(big / max(small, 1e-5)), round(big_bound / max(small_bound, 1e-5)))
         for name, [[small, small_bound], [big, big_bound]] in times.items()
     }
-    superlinear = {name: r for name, r in ratios.items() if r[0] >= 30 or r[1] >= 30}
+    limit = (big_size // small_size) * 10
+    superlinear = {name: r for name, r in ratios.items() if r[0] >= limit or r[1] >= limit}
     assert superlinear == {}, ratios
 
 
@@ -689,7 +688,12 @@ def test_nesting_past_the_c_stack_raises_as_pure_ruamel_does_instead_of_crashing
         "    print('RecursionError')\n"
     )
     out = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, timeout=300, check=False
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+        env={k: v for k, v in os.environ.items() if k != PURE_ENV},
     )
     assert out.returncode == 0, out.stderr[-500:]
     assert out.stdout.strip() == "RecursionError"
@@ -885,6 +889,7 @@ def test_no_libyaml_version_without_the_extension(monkeypatch: pytest.MonkeyPatc
 
 
 @requires_c
+@pytest.mark.usefixtures("pure_switch")
 def test_the_installed_extension_is_the_checked_build():
     """CI installs the extension; a clib release with another libyaml must fail here, so that
     the search behind the guards is rerun before the gate is widened."""

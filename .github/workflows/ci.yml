@@ -31,9 +31,20 @@ jobs:
         # Common platforms: ["ubuntu-latest", "macos-latest", "windows-latest"]
         os: ["ubuntu-latest"]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        # The dev group installs ruamel's C extension, so the suite reads YAML C-first.
+        # The "pure" entries run the same suite with the pure-Python parser, which is
+        # what an install without the extension gets. One entry per configuration, so a
+        # failure names the Python version and the parser that broke.
+        yaml-parser: ["c-first", "pure"]
+
+    name: build (${{ matrix.os }}, ${{ matrix.python-version }}, ${{ matrix.yaml-parser }})
 
     # Linux only by default. Use ${{ matrix.os }} for other OSes.
     runs-on: ${{ matrix.os }}
+
+    env:
+      # Set to anything but empty or "0", this turns the C parser off for every read.
+      FRONTMATTER_FORMAT_PURE_YAML: ${{ matrix.yaml-parser == 'pure' && '1' || '' }}
 
     steps:
       # Generally following uv docs:
@@ -85,22 +96,67 @@ jobs:
       - name: Verify linting did not modify tracked files
         run: git diff --exit-code
 
+      - name: Verify the YAML parser this entry tests
+        # Fail closed: an entry that silently read with the other parser would pass
+        # the suite without testing what it claims to.
+        run: uv run --frozen python devtools/check_yaml_parser.py ${{ matrix.yaml-parser }}
+
       - name: Run tests
         run: uv run --frozen pytest
 
       - name: Build release artifacts
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.12' && matrix.yaml-parser == 'c-first'
         run: uv build --no-build-isolation
 
       - name: Validate release artifacts
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.12' && matrix.yaml-parser == 'c-first'
         run: uv run --frozen python devtools/check_dist.py dist
 
       - name: Smoke-test artifact installation
-        if: matrix.python-version == '3.12'
+        if: matrix.python-version == '3.12' && matrix.yaml-parser == 'c-first'
         shell: bash
         run: |
           for artifact in dist/*.whl dist/*.tar.gz; do
             uv run --isolated --no-project --with "${artifact}" \
               python -c "import frontmatter_format"
           done
+
+  # The dependency floor: the oldest ruamel.yaml this package accepts, with the C
+  # extension that release installs by default on CPython. The locked graph above
+  # tests only the newest resolution, and ruamel.yaml 0.18 differs from 0.19 in the
+  # loader attributes the C-first reader inspects.
+  floor:
+    name: floor (ubuntu-latest, 3.10, ruamel.yaml 0.18.10, c-first)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (official GitHub action)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv (official Astral action)
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          version: "0.11.25"
+          checksum: "1db18b5e76fa645a7f3865773139bdec8e2d46adbdbb35e7410b34fa8015ccd2"
+          enable-cache: true
+          python-version: "3.10"
+
+      - name: Set up Python (using uv)
+        run: uv python install
+
+      - name: Install all dependencies
+        run: uv sync --all-extras --all-groups --frozen
+
+      - name: Pin ruamel.yaml to the dependency floor
+        # Resolved outside the lock, under the same cool-off (UV_EXCLUDE_NEWER above),
+        # into the project environment; --no-sync below keeps uv from restoring the lock.
+        run: uv pip install 'ruamel.yaml==0.18.10' 'ruamel.yaml.clib>=0.2.15'
+
+      - name: Verify the floor and the YAML parser this job tests
+        run: uv run --no-sync python devtools/check_yaml_parser.py c-first --ruamel 0.18.10
+
+      - name: Run tests
+        run: uv run --no-sync pytest
