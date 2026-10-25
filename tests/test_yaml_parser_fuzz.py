@@ -14,6 +14,7 @@ from devtools.yaml_parser_fuzz import (
     SEARCHED_PAIRS,
     Generator,
     check,
+    check_all,
     installed_pair,
     kept_reading,
     main,
@@ -33,6 +34,8 @@ def test_the_search_finds_a_divergence_when_a_guard_is_missing(monkeypatch: pyte
     assert found is not None
     text, c_reading, pure_reading = found
     assert text == "[[]:]" and c_reading[0] == "value" and pure_reading[0] == "error"
+    # The search's own loop reports the same divergence and counts the kept reading.
+    assert check_all(["[[]:]", "k: v\n", "k: !x\n"]) == (3, 2, [found])
 
 
 @requires_c

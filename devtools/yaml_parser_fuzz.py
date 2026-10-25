@@ -128,15 +128,21 @@ def kept_reading(text: str) -> Outcome | None:
     return c_first_outcome(text)
 
 
+def compare(text: str, c_reading: Outcome) -> tuple[str, Outcome, Outcome] | None:
+    """The divergence between a kept C reading of `text` and pure ruamel's, or None. The one
+    comparison, used by `check` (and so the tests) and by the search's `check_all`."""
+    pure_reading = pure_outcome(text)
+    if c_reading != pure_reading:
+        return (text, c_reading, pure_reading)
+    return None
+
+
 def check(text: str) -> tuple[str, Outcome, Outcome] | None:
     """A divergence for `text`, or None. Only a kept C reading can differ from pure ruamel."""
     c_reading = kept_reading(text)
     if c_reading is None:
         return None
-    pure_reading = pure_outcome(text)
-    if c_reading != pure_reading:
-        return (text, c_reading, pure_reading)
-    return None
+    return compare(text, c_reading)
 
 
 # ---- Generators ---------------------------------------------------------------------------
@@ -359,9 +365,9 @@ def check_all(texts: Iterable[str]) -> Result:
         if c_reading is None:
             continue
         kept += 1
-        pure_reading = pure_outcome(text)
-        if c_reading != pure_reading:
-            found.append((text, c_reading, pure_reading))
+        found_one = compare(text, c_reading)
+        if found_one is not None:
+            found.append(found_one)
     return checked, kept, found
 
 
