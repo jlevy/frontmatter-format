@@ -21,8 +21,9 @@ Run it from the repo root with the C extension installed (the dev group installs
     uv run python devtools/yaml_parser_fuzz.py 100000 --corpus docs README.md
 
 Exit status is 1 when any divergence is found, 2 without a usable C parser. The count is
-split into batches of `--batch` texts, one seed each. With `--corpus`, texts are mutations
-of the frontmatter blocks and YAML files found under the given paths. The unit tests in
+split into batches of `--batch` texts, one seed each. With `--corpus`, every frontmatter
+block and YAML file found under the given paths is checked once as it is, and the count is
+then spent on mutations of them (a count of zero checks only the files). The unit tests in
 `tests/test_c_parser.py` run a small deterministic corpus of the same kind on every CI run;
 this script is the larger search behind them.
 
@@ -309,6 +310,17 @@ def search(job: tuple[int, int, list[str]]) -> tuple[int, Divergences]:
     return count, found
 
 
+def check_all(texts: list[str]) -> tuple[int, Divergences]:
+    """Every text in `texts` once, unmutated: the corpus seeds themselves."""
+    warnings.simplefilter("ignore")
+    found: Divergences = []
+    for text in texts:
+        result = check(text)
+        if result is not None:
+            found.append(result)
+    return len(texts), found
+
+
 def exhaustive(job: tuple[int, int]) -> tuple[int, Divergences]:
     low, high = job
     warnings.simplefilter("ignore")
@@ -357,14 +369,32 @@ def _distribution_version(name: str) -> str:
         return "not installed"
 
 
+def _count(text: str) -> int:
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be zero or more")
+    return value
+
+
+def _positive(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be one or more")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("count", type=int, nargs="?", default=0, help="how many texts to generate")
+    parser.add_argument(
+        "count", type=_count, nargs="?", default=0, help="how many texts to generate"
+    )
     parser.add_argument("--seed", type=int, default=0, help="first seed; each batch uses the next")
-    parser.add_argument("--batch", type=int, default=5000, help="texts per worker batch")
-    parser.add_argument("--jobs", type=int, default=None, help="worker processes (default: CPUs)")
+    parser.add_argument("--batch", type=_positive, default=5000, help="texts per worker batch")
+    parser.add_argument(
+        "--jobs", type=_positive, default=None, help="worker processes (default: CPUs)"
+    )
     parser.add_argument(
         "--exhaustive",
         action="store_true",
@@ -384,6 +414,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.corpus and not corpus:
         print("no YAML found under the corpus paths", file=sys.stderr)
         return 2
+    if not args.count and not args.exhaustive and not corpus:
+        parser.error("nothing to search: give a count, --exhaustive or --corpus")
 
     sizes = [args.batch] * (args.count // args.batch)
     if args.count % args.batch:
@@ -391,6 +423,10 @@ def main(argv: list[str] | None = None) -> int:
     jobs: list[Any] = [(args.seed + index, size, corpus) for index, size in enumerate(sizes)]
     total = 0
     found: dict[str, tuple[Outcome, Outcome]] = {}
+    # The corpus seeds themselves first, unmutated, then the generated or mutated texts.
+    seeds_checked, seed_divergences = check_all(corpus)
+    for text, c_reading, pure_reading in seed_divergences:
+        found.setdefault(text, (c_reading, pure_reading))
     for checked, divergences in results(search, jobs, args.jobs):
         total += checked
         for text, c_reading, pure_reading in divergences:
@@ -413,8 +449,8 @@ def main(argv: list[str] | None = None) -> int:
         + f"Python {sys.version.split()[0]}, seeds {args.seed}-{last_seed}"
     )
     print(
-        f"generated texts: {total}  exhaustive texts: {exhaustive_total}  "
-        + f"corpus seeds: {len(corpus)}  divergences: {len(found)}"
+        f"generated or mutated texts: {total}  exhaustive texts: {exhaustive_total}  "
+        + f"corpus seeds checked: {seeds_checked}  divergences: {len(found)}"
     )
     for text, (c_reading, pure_reading) in sorted(found.items(), key=lambda kv: len(kv[0]))[:40]:
         print(repr(text))
