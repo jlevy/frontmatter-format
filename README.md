@@ -284,37 +284,43 @@ A representer added to one `new_yaml()` instance applies to that instance alone,
 
 ### Performance
 
-Reading is C-first: when ruamel’s optional C extension, `ruamel.yaml.clib`, is installed
-and passes this library’s version check, the readers (`fmf_read`,
-`fmf_read_frontmatter`, `from_yaml_string` and `read_yaml_file`) parse with libyaml;
-otherwise they use pure-Python ruamel.
-The results are meant to be pure ruamel’s either way: a text with a shape libyaml was
-found to read differently goes straight to pure ruamel, and a text libyaml fails on is
-read again by pure ruamel (see
-[How C-First Reading Stays Exact](#how-c-first-reading-stays-exact)).
+ruamel.yaml can use an optional C extension, `ruamel.yaml.clib`: a Cython wrapper around
+a lightly patched libyaml 0.1.7, with prebuilt wheels for CPython 3.9–3.14 on Linux,
+macOS and Windows. ruamel.yaml 0.18 depended on it on CPython below a Python-version cap
+(<3.13 for 0.18.0–0.18.10, <3.14 for 0.18.11–0.18.16, <3.15 for 0.18.17); since 0.19.1
+it is opt-in (the `oldlibyaml` extra).
+The newer `ruamel.yaml.clibz` is the same libyaml, compiled with Zig at install time and
+published only as source; ruamel’s `YAML()` API does not use it, so it gives no speedup
+here. libyaml parses YAML 1.1 and pure ruamel YAML 1.2, so they disagree on some texts;
+the readers (`fmf_read`, `fmf_read_frontmatter`, `from_yaml_string` and
+`read_yaml_file`) give libyaml only the texts on which the two were shown to agree, and
+read the rest, and anything libyaml rejects, with pure ruamel (see
+[How C-First Reading Stays Exact](#how-c-first-reading-stays-exact)). They use libyaml
+only for clib’s libyaml 0.1.7 on ruamel.yaml 0.18–0.19, so the results are meant to be
+the same either way; only speed changes, several times faster on large documents.
+To get the speedup, install `ruamel.yaml.clib` (`uv add ruamel.yaml.clib`), not
+`ruamel.yaml[libyaml]`. `frontmatter_format.yaml_parser_mode()` returns `"c-first"` when
+libyaml is in use and `"pure"` otherwise, and `FRONTMATTER_FORMAT_PURE_YAML=1` forces
+the pure parser (it is read on every load).
 
-Measured with ruamel.yaml 0.19.1 and `ruamel.yaml.clib` 0.2.15 on CPython 3.10 to 3.14,
-C-first reading ran at these speeds relative to pure ruamel:
+Measured with ruamel.yaml 0.19.1 and `ruamel.yaml.clib` 0.2.15, C-first reading ran at
+these speeds relative to pure ruamel:
 
 | Input | Speed |
 | --- | --- |
-| Typical frontmatter (177 real Markdown files; median blocks of 207 and 572 characters) | 1.6x to 3.0x |
-| A 600 KB block-style YAML document of 1,000 records | 4x to 7x |
-| The same records with an empty list (`[]`) in each, which skips libyaml (below) | 0.8x to 1.1x |
+| Typical frontmatter (177 real Markdown files; median blocks of 207 and 572 characters; CPython 3.10 to 3.14) | 1.6x to 3.0x |
+| A 600 KB block-style YAML document of 1,000 records (CPython 3.10 to 3.14) | 4x to 7x |
+| A 0.4 MB block document (a separate run, CPython 3.13: 2.16 s pure, 0.45 s C-first) | 4.8x |
+| The 1,000 records with an empty list (`[]`) in each, which skips libyaml (below) | 0.8x to 1.1x |
 | A text libyaml rejects, which is read twice | 0.8x to 0.9x |
 
-A long document with more than about 140 flow collections (`[...]`, `{...}`) in all, or
-indented about 75 columns, is read by pure ruamel, because its nesting depth is not
-bounded cheaply. Every text is read by pure ruamel while a default customizer configures
-the loader, as one that calls `register_class` does; `yaml_parser_mode()` then reports
-`"pure"`.
-
-`frontmatter_format.yaml_parser_mode()` returns `"c-first"` when the readers use libyaml
-and `"pure"` otherwise.
-Set `FRONTMATTER_FORMAT_PURE_YAML=1` to read with pure ruamel only, for diagnosis; it is
-read on every load.
-
-<!-- PLACEHOLDER: how to install ruamel.yaml.clib. A verified paragraph is pending; replace this comment with it before merging. -->
+There is no speedup where libyaml is skipped.
+By design, a text whose shape could nest past 150 levels (`_C_SCAN_DEPTH`) reads pure:
+every `[` or `{` that can open a flow collection counts, as does indentation, so a
+typical record list reaches that bound at about 140 flow collections in all.
+Texts with a shape libyaml was found to read differently (below) also go straight to
+pure ruamel, and so does every text while a default customizer configures the loader, as
+one that calls `register_class` does (`yaml_parser_mode()` then reports `"pure"`).
 
 Writing is pure-Python whether or not the extension is installed: the writers and direct
 `new_yaml()` loads use ruamel’s pure-Python parser and emitter, so their output bytes
@@ -345,7 +351,9 @@ Install `frontmatter-format` from PyPI with your preferred Python package manage
 uv add frontmatter-format
 ```
 
-Reading is faster with ruamel’s optional C extension; see [Performance](#performance).
+For faster reading, also install ruamel’s optional C extension, `ruamel.yaml.clib`
+(`uv add ruamel.yaml.clib`), not `ruamel.yaml[libyaml]`; see
+[Performance](#performance).
 
 ## Usage
 
