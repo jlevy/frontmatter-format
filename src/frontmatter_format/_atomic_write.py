@@ -1,5 +1,5 @@
 """
-Atomic text file writes, for the frontmatter writers.
+Atomic text file writes, for the frontmatter writers and `write_yaml_file`.
 """
 
 import os

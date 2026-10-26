@@ -21,7 +21,7 @@ from frontmatter_format.frontmatter_format import (
     fmf_write,
 )
 from frontmatter_format.key_sort import custom_key_sort
-from frontmatter_format.yaml_util import dump_yaml, from_yaml_string, to_yaml_string
+from frontmatter_format.yaml_util import dump_yaml, to_yaml_string
 
 
 def test_fmf_basic(tmp_path: Path):
@@ -504,21 +504,46 @@ def test_writers_round_trip_dict_metadata_with_separators(
     tmp_path: Path, style: FmStyle, separator: str
 ):
     metadata = {"a": f"x{separator}y", "b": 1}
-    # The frontmatter layer must read back what the YAML layer alone reads back.
-    yaml_reading = from_yaml_string(to_yaml_string(metadata))
-    if separator != "\u0085":
-        assert yaml_reading == metadata
-    # ruamel writes a NEL raw inside a quoted scalar and folds it to a space on reading,
-    # with or without frontmatter, so only the YAML layer's own reading is expected.
 
     written = tmp_path / "written.txt"
     fmf_write(written, "body\n", metadata, style=style)
-    assert fmf_read(written) == ("body\n", yaml_reading)
+    assert fmf_read(written) == ("body\n", metadata)
 
     inserted = tmp_path / "inserted.txt"
     inserted.write_text("body\n", encoding="utf-8")
     fmf_insert_frontmatter(inserted, metadata, fm_style=style)
-    assert fmf_read(inserted) == ("body\n", yaml_reading)
+    assert fmf_read(inserted) == ("body\n", metadata)
+
+
+LINE_BREAK_CHARACTERS = {"NEL": "\x85", "LS": "\u2028", "PS": "\u2029", "CR": "\r", "CRLF": "\r\n"}
+
+
+@pytest.mark.usefixtures("yaml_reader")
+@pytest.mark.parametrize("char", LINE_BREAK_CHARACTERS.values(), ids=LINE_BREAK_CHARACTERS.keys())
+@pytest.mark.parametrize("style", list(FmStyle))
+def test_line_break_characters_in_metadata_values_round_trip(
+    tmp_path: Path, style: FmStyle, char: str
+):
+    # The YAML writer escapes these (fmf-jm7i), so neither the frontmatter layer nor either
+    # YAML reader ever sees them raw.
+    metadata = {"a": f"x{char}y", "b": f"line one\nline two{char}end\n", "c": [f"{char}"]}
+    raw_metadata = to_yaml_string(metadata)
+    assert not any(c in raw_metadata for c in ("\x85", "\u2028", "\u2029", "\r"))
+
+    as_dict = tmp_path / "dict.txt"
+    fmf_write(as_dict, "body\n", metadata, style=style)
+    assert fmf_read(as_dict) == ("body\n", metadata)
+
+    as_raw = tmp_path / "raw.txt"
+    fmf_write(as_raw, "body\n", raw_metadata, style=style)
+    assert fmf_read_raw(as_raw) == ("body\n", raw_metadata)
+    assert fmf_read(as_raw) == ("body\n", metadata)
+
+    inserted = tmp_path / "inserted.txt"
+    inserted.write_text("body\n", encoding="utf-8")
+    fmf_insert_frontmatter(inserted, metadata, fm_style=style)
+    assert fmf_read(inserted) == ("body\n", metadata)
+    assert fmf_read_frontmatter(inserted) == metadata
 
 
 def test_fmf_write_raw_metadata_splits_at_lf_crlf_and_cr(tmp_path: Path):
