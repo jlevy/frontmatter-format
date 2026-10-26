@@ -626,6 +626,27 @@ def test_writers_keep_existing_file_mode(tmp_path: Path, writer: str, mode: int)
     assert list(tmp_path.iterdir()) == [file_path]
 
 
+@pytest.mark.parametrize("writer", WRITERS)
+def test_writers_still_write_where_chmod_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer: str
+):
+    # Some filesystems (some FUSE mounts, Android shared storage) refuse chmod. Keeping the
+    # mode is best effort there: the write still happens, as it did before modes were kept.
+    file_path = tmp_path / "script.py"
+    file_path.write_text("#---\n# a: 1\n#---\nprint()\n", encoding="utf-8")
+
+    def refuse_chmod(*_args: Any, **_kwargs: Any) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "chmod", refuse_chmod)
+    _run_writer(writer, file_path)
+    monkeypatch.undo()
+
+    expected = "print()\n" if writer == "fmf_strip_frontmatter" else "#---\n# b: 2\n#---\nprint()\n"
+    assert file_path.read_text(encoding="utf-8") == expected
+    assert list(tmp_path.iterdir()) == [file_path]
+
+
 @needs_posix_modes
 def test_fmf_write_gives_new_file_the_umask_default_mode(tmp_path: Path):
     file_path = tmp_path / "new.md"

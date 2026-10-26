@@ -37,8 +37,9 @@ def atomic_write_text(path: str | Path, label: str) -> Generator[TextIO, None, N
     Write UTF-8 text to `path` atomically.
 
     Yields a text stream on a new temp file beside `path`. When the block ends without an
-    error, gives the temp file the mode of the file at `path`, if there is one, and renames
-    it over `path`. On any error, removes the temp file and leaves `path` as it was.
+    error, gives the temp file the mode of the file at `path`, if there is one and the
+    filesystem allows it, and renames it over `path`. On any error, removes the temp file
+    and leaves `path` as it was.
     Readers see the old file or the new one, never part of a write, and concurrent writers
     each write their own temp file, so the last rename wins.
     """
@@ -49,8 +50,11 @@ def atomic_write_text(path: str | Path, label: str) -> Generator[TextIO, None, N
             yield stream
         try:
             shutil.copymode(path, temp_path)
-        except FileNotFoundError:
-            pass  # A new file keeps the default mode the temp file was created with.
+        except OSError:
+            # With no file at `path` yet, the new file keeps the default mode the temp file
+            # was created with. That is also the fallback on a filesystem that refuses
+            # chmod (some FUSE mounts), which still gets the write.
+            pass
         os.replace(temp_path, path)
     except BaseException:
         temp_path.unlink(missing_ok=True)
