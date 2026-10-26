@@ -258,41 +258,84 @@ formatted ISO 8601 strings instead.
 Alias-free output improves portability, but it does not restrict metadata to a
 JSON-compatible subset of YAML.
 
-### Faster Reading with ruamel’s C Extension
+### Custom YAML Types
 
-If ruamel’s optional C extension, `ruamel.yaml.clib`, is installed, the readers
-(`fmf_read`, `fmf_read_frontmatter`, `from_yaml_string` and `read_yaml_file`) parse with
-libyaml wherever it is known to read a text as pure-Python ruamel does.
+Every read and write builds its own ruamel `YAML` instance with `new_yaml()`.
+Representers and constructors registered on an instance stay with that instance;
+ruamel’s shared classes and other instances are not changed.
+To register a representer for every writer (`fmf_write`, `fmf_insert_frontmatter`,
+`to_yaml_string`, `dump_yaml` and `write_yaml_file`), call
+`add_default_yaml_representer` once, before the writes that need it:
+
+```python
+from decimal import Decimal
+from frontmatter_format import add_default_yaml_representer, to_yaml_string
+
+add_default_yaml_representer(Decimal, lambda r, d: r.represent_str(str(d)))
+print(to_yaml_string({"price": Decimal("9.99")}))  # price: '9.99'
+```
+
+For other configuration, such as reading a tagged class with
+`lambda y: y.register_class(Point)`, use `add_default_yaml_customizer`, which runs on
+every instance built afterwards, the readers’ included.
+Both apply only to instances built after the call.
+A representer added to one `new_yaml()` instance applies to that instance alone, so
+`fmf_write` of the same type still raises `RepresenterError`.
+
+### Performance
+
+Reading is C-first: when ruamel’s optional C extension, `ruamel.yaml.clib`, is installed
+and passes this library’s version check, the readers (`fmf_read`,
+`fmf_read_frontmatter`, `from_yaml_string` and `read_yaml_file`) parse with libyaml;
+otherwise they use pure-Python ruamel.
+The results match pure ruamel’s either way: a text with a shape libyaml was found to
+read differently goes straight to pure ruamel, and a text libyaml fails on is read again
+by pure ruamel (see
+[How C-First Reading Stays Exact](#how-c-first-reading-stays-exact)).
+
+Measured with ruamel.yaml 0.19.1 and `ruamel.yaml.clib` 0.2.15 on CPython 3.10 to 3.14,
+C-first reading ran at these speeds relative to pure ruamel:
+
+| Input | Speed |
+| --- | --- |
+| Typical frontmatter (177 real Markdown files; median blocks of 207 and 572 characters) | 1.6x to 3.0x |
+| A 600 KB block-style YAML document of 1,000 records | 4x to 7x |
+| The same records with an empty list (`[]`) in each, which skips libyaml (below) | 0.8x to 1.1x |
+| A text libyaml rejects, which is read twice | 0.8x to 0.9x |
+
+A long document with more than about 140 flow collections (`[...]`, `{...}`) in all, or
+indented about 75 columns, is read by pure ruamel, because its nesting depth is not
+bounded cheaply. Every text is read by pure ruamel while a default customizer configures
+the loader, as one that calls `register_class` does; `yaml_parser_mode()` then reports
+`"pure"`.
+
+`frontmatter_format.yaml_parser_mode()` returns `"c-first"` when the readers use libyaml
+and `"pure"` otherwise.
+Set `FRONTMATTER_FORMAT_PURE_YAML=1` to read with pure ruamel only, for diagnosis; it is
+read on every load.
+
+<!-- PLACEHOLDER: how to install ruamel.yaml.clib. A verified paragraph is pending; replace this comment with it before merging. -->
+
+Writing is pure-Python whether or not the extension is installed: the writers and direct
+`new_yaml()` loads use ruamel’s pure-Python parser and emitter, so their output bytes
+and readings do not depend on what else is installed.
+
+#### How C-First Reading Stays Exact
+
 libyaml implements YAML 1.1 and pure ruamel YAML 1.2, so the two disagree on some texts.
 A text with a shape on which libyaml was found to read differently (a tab, a line
 starting with `%`, NEL, LS, PS or a byte order mark, a `...` line, any tag, anchor or
 alias, and a few block scalar and flow forms) goes straight to pure ruamel, and any text
-libyaml fails on, or composes to a document nested more than 100 levels deep or sharing a
-node, is read again by pure ruamel.
+libyaml fails on, or composes to a document nested more than 100 levels deep or sharing
+a node, is read again by pure ruamel.
 The result is meant to be pure ruamel’s in every case: value, types, key order and
 errors. The list of shapes rests on a differential search over millions of generated and
 mutated documents, not on a proof, so the C parser is used only with libyaml 0.1.7 on
 ruamel.yaml 0.18 or 0.19, the build and releases that search covered; with any other
 build the readers report `"pure"` and use pure ruamel.
-Two differences that change no value remain: a warning issued while libyaml reads carries
-libyaml’s source marks, and a tag constructor registered through a customizer that raises
-runs on the libyaml attempt and again on the pure re-read.
-
-The extension is not a dependency of this package, but ruamel.yaml 0.18.x declares it as
-one on CPython, so many environments have it without asking for it.
-To add it, install it in the same environment, for example with `uv add ruamel.yaml.clib`.
-`frontmatter_format.yaml_parser_mode()` returns `"c-first"` when the readers use it and
-`"pure"` otherwise. Set `FRONTMATTER_FORMAT_PURE_YAML=1` to read with pure ruamel only,
-for diagnosis.
-The gain grows with document size: a few times faster on typical frontmatter blocks, more
-on large ones, and slower than pure ruamel on a text libyaml rejects, which is read twice.
-
-Writers and direct `new_yaml()` loads use ruamel’s pure-Python parser and emitter
-whether or not the extension is installed, so their output bytes and their readings do
-not depend on what else is installed.
-With the extension installed, this changes what earlier versions did: a `safe` dump wrote
-libyaml’s bytes (which escape astral characters and break lines differently) at libyaml’s
-speed, and a `new_yaml().load()` call used libyaml.
+Two differences that change no value remain: a warning issued while libyaml reads
+carries libyaml’s source marks, and a tag constructor registered through a customizer
+that raises runs on the libyaml attempt and again on the pure re-read.
 
 ## Installation
 
@@ -301,6 +344,8 @@ Install `frontmatter-format` from PyPI with your preferred Python package manage
 ```shell
 uv add frontmatter-format
 ```
+
+Reading is faster with ruamel’s optional C extension; see [Performance](#performance).
 
 ## Usage
 
