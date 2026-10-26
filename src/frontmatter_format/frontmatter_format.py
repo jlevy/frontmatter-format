@@ -2,7 +2,6 @@
 Python implementation of frontmatter format.
 """
 
-import os
 import shutil
 from dataclasses import dataclass
 from enum import Enum
@@ -12,6 +11,7 @@ from typing import Any, TextIO
 
 from ruamel.yaml.error import YAMLError
 
+from ._atomic_write import atomic_write_text
 from .key_sort import KeySort
 from .yaml_util import from_yaml_string, to_yaml_string
 
@@ -74,6 +74,20 @@ Parsed metadata from frontmatter.
 """
 
 
+def _split_lines(text: str) -> list[str]:
+    """
+    Split text into lines at LF, CRLF and CR, the line endings the readers recognize,
+    dropping the line endings and the empty string after a final one. Unlike
+    `str.splitlines()`, does not split at the other characters Unicode treats as line
+    boundaries (LS, PS, NEL, VT, FF, FS, GS and RS), which a YAML value can hold, so
+    writing a value that holds one never breaks its line.
+    """
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def fmf_write(
     path: Path | str,
     content: str,
@@ -86,6 +100,10 @@ def fmf_write(
     Write the given Markdown text content to a file, with associated YAML metadata, in a
     generalized Jekyll-style frontmatter format. Metadata can be a raw string or a dict
     that will be serialized to YAML.
+
+    Writes atomically, through a uniquely named temp file in the same directory. A file
+    that is replaced keeps its mode; a new file gets the default mode (0o666 less the
+    umask).
     """
     if isinstance(metadata, str):
         frontmatter_str = metadata
@@ -96,26 +114,17 @@ def fmf_write(
     if make_parents and path.parent:
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    tmp_path = f"{path}.fmf.write.tmp"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            if metadata:
-                f.write(style.start)
+    with atomic_write_text(path, "write") as f:
+        if metadata:
+            f.write(style.start)
+            f.write("\n")
+            for line in _split_lines(frontmatter_str):
+                f.write(style.prefix + line)
                 f.write("\n")
-                for line in frontmatter_str.splitlines():
-                    f.write(style.prefix + line)
-                    f.write("\n")
-                f.write(style.end)
-                f.write("\n")
+            f.write(style.end)
+            f.write("\n")
 
-            f.write(content)
-        os.replace(tmp_path, path)
-    except Exception as e:
-        try:
-            os.remove(tmp_path)
-        except FileNotFoundError:
-            pass
-        raise e
+        f.write(content)
 
 
 def _parse_metadata(path: Path | str, metadata_str: str | None) -> Metadata | None:
@@ -123,13 +132,15 @@ def _parse_metadata(path: Path | str, metadata_str: str | None) -> Metadata | No
         return None
     try:
         parsed = from_yaml_string(metadata_str)
-        if not isinstance(parsed, dict):
-            raise FmFormatError(
-                f"Expected YAML metadata to be a dict, got {type(parsed)}: `{path}`"
-            )
-        return parsed
     except YAMLError as e:
         raise FmFormatError(f"Error parsing YAML metadata: `{path}`: {e}") from e
+    if parsed is None:
+        # Blank, comment-only or null (`~`) frontmatter holds no value: no metadata, as
+        # for empty frontmatter.
+        return None
+    if not isinstance(parsed, dict):
+        raise FmFormatError(f"Expected YAML metadata to be a dict, got {type(parsed)}: `{path}`")
+    return parsed
 
 
 def fmf_read(path: Path | str) -> tuple[str, Metadata | None]:
@@ -138,6 +149,10 @@ def fmf_read(path: Path | str) -> tuple[str, Metadata | None]:
     in Jekyll-style frontmatter format. Auto-detects variant formats for HTML and code
     (Python style) based on whether the prefix is `---` or `<!---` or `#---`.
     Reads the entire file into memory. Parses the metadata as YAML.
+
+    The metadata is None when there is no frontmatter, or when the frontmatter holds no
+    YAML value: empty, blank, only comments, or a YAML null such as `~`. Raises
+    `FmFormatError` when the frontmatter holds any other value that is not a mapping.
     """
     content, metadata_str = fmf_read_raw(path)
     metadata = _parse_metadata(path, metadata_str)
@@ -148,11 +163,12 @@ def fmf_read_raw(path: Path | str) -> tuple[str, str | None]:
     """
     Reads the full content and raw (unparsed) metadata from the file, both as strings.
     """
-    metadata_str, content_offset, _ = fmf_read_frontmatter_raw(path)
-
-    with open(path, encoding="utf-8") as f:
-        f.seek(content_offset)
-        content = f.read()
+    with open(path, encoding="utf-8") as stream:
+        metadata_str, content_offset, _ = _read_frontmatter_file_stream(stream, path)
+        # A file that is not UTF-8 reads as having no frontmatter, at offset 0, so this
+        # read raises its decode error.
+        stream.seek(content_offset)
+        content = stream.read()
 
     return content, metadata_str
 
@@ -160,7 +176,10 @@ def fmf_read_raw(path: Path | str) -> tuple[str, str | None]:
 def fmf_read_frontmatter(path: Path | str) -> Metadata | None:
     """
     Reads and parses only the metadata frontmatter from the file.
-    Returns None if there is no frontmatter.
+
+    Returns None if there is no frontmatter, or if the frontmatter holds no YAML value:
+    empty, blank, only comments, or a YAML null such as `~`. Raises `FmFormatError` when
+    the frontmatter holds any other value that is not a mapping.
     """
     metadata_str, _, _ = fmf_read_frontmatter_raw(path)
     return _parse_metadata(path, metadata_str)
@@ -236,6 +255,19 @@ def _read_frontmatter_stream(
     return None, 0, 0
 
 
+def _read_frontmatter_file_stream(
+    stream: TextIO, path: Path | str, *, strict: bool = True
+) -> tuple[str | None, int, int]:
+    """
+    `_read_frontmatter_stream` on a file opened as UTF-8 text: a file that is not UTF-8
+    has no frontmatter.
+    """
+    try:
+        return _read_frontmatter_stream(stream, strict=strict, source=path)
+    except UnicodeDecodeError:
+        return None, 0, 0
+
+
 def fmf_read_frontmatter_raw(path: Path | str) -> tuple[str | None, int, int]:
     """
     Reads the metadata frontmatter from the file and returns:
@@ -248,11 +280,8 @@ def fmf_read_frontmatter_raw(path: Path | str) -> tuple[str | None, int, int]:
     Does not parse the metadata or read the body content.
     Returns None, 0, 0 if there is no frontmatter. Safe on binary files.
     """
-    try:
-        with open(path, encoding="utf-8") as stream:
-            return _read_frontmatter_stream(stream, strict=True, source=path)
-    except UnicodeDecodeError:
-        return None, 0, 0
+    with open(path, encoding="utf-8") as stream:
+        return _read_frontmatter_file_stream(stream, path)
 
 
 def fmf_split_frontmatter(content: str, strict: bool = True) -> tuple[str | None, int, int]:
@@ -286,8 +315,48 @@ def fmf_split_frontmatter(content: str, strict: bool = True) -> tuple[str | None
 def fmf_has_frontmatter(path: Path | str) -> bool:
     """
     Returns True if the file has frontmatter, False otherwise. Safe on binary files.
+
+    An opening delimiter with no closing one, such as a Markdown `---` thematic break at
+    the top of a file, is not frontmatter, so this returns False for it, where `fmf_read`
+    raises `FmFormatError`. Frontmatter that holds no metadata, such as an empty block,
+    is still frontmatter.
     """
-    return fmf_read_frontmatter_raw(path)[0] is not None
+    with open(path, encoding="utf-8") as stream:
+        return _read_frontmatter_file_stream(stream, path, strict=False)[0] is not None
+
+
+def _rewrite_frontmatter(
+    path: Path | str, label: str, frontmatter_lines: list[str], fm_style: FmStyle | None
+) -> None:
+    """
+    Atomically replace the file's frontmatter with `frontmatter_lines` (none, to strip it),
+    keeping the body and any `#` lines before hash-style frontmatter. `fm_style` is the
+    style of the new frontmatter, if there is any.
+    """
+    with atomic_write_text(path, label) as temp_file:
+        with open(path, encoding="utf-8") as original_file:
+            # Offsets from this stream, so they match the text copied from it.
+            _, content_offset, metadata_start_offset = _read_frontmatter_file_stream(
+                original_file, path
+            )
+            if metadata_start_offset > 0:
+                if fm_style is not None and fm_style is not FmStyle.hash:
+                    raise FmFormatError(
+                        f"Cannot insert {fm_style.name}-style frontmatter after the `#` "
+                        + f"lines before hash-style frontmatter: `{path}`"
+                    )
+                # Copy the `#` lines (a shebang, a PEP 723 block) that end where the
+                # existing frontmatter starts.
+                original_file.seek(0)
+                while original_file.tell() != metadata_start_offset:
+                    line = original_file.readline()
+                    if not line:
+                        break  # End of file: only if the file changed while being read.
+                    temp_file.write(line)
+
+            temp_file.writelines(frontmatter_lines)
+            original_file.seek(content_offset)
+            shutil.copyfileobj(original_file, temp_file)
 
 
 def fmf_strip_frontmatter(path: Path | str) -> None:
@@ -295,24 +364,13 @@ def fmf_strip_frontmatter(path: Path | str) -> None:
     Strip the metadata frontmatter from the file, in place on the file.
     Does not read the content (except to do a file copy) so should work fairly
     quickly on large files. Does nothing if there is no frontmatter.
+
+    Keeps any `#` lines before hash-style frontmatter, such as a shebang or a PEP 723
+    script block. Writes atomically and keeps the file's mode, as `fmf_write` does.
     """
     _, content_offset, _ = fmf_read_frontmatter_raw(path)
     if content_offset > 0:
-        tmp_path = f"{path}.fmf.strip.tmp"
-        try:
-            with (
-                open(path, encoding="utf-8") as original_file,
-                open(tmp_path, "w", encoding="utf-8") as temp_file,
-            ):
-                original_file.seek(content_offset)
-                shutil.copyfileobj(original_file, temp_file)
-            os.replace(tmp_path, path)
-        except Exception as e:
-            try:
-                os.remove(tmp_path)
-            except FileNotFoundError:
-                pass
-            raise e
+        _rewrite_frontmatter(path, "strip", [], None)
 
 
 def fmf_insert_frontmatter(
@@ -324,10 +382,16 @@ def fmf_insert_frontmatter(
     """
     Insert metadata as frontmatter into the given file, inserting at the top
     and replacing any existing frontmatter.
+
+    When existing hash-style frontmatter follows `#` lines, such as a shebang or a PEP 723
+    script block, keeps those lines first and inserts the new frontmatter after them.
+    Only hash-style frontmatter can follow them, so then raises `FmFormatError`, and
+    leaves the file unchanged, if `fm_style` is another style. Writes atomically and keeps
+    the file's mode, as `fmf_write` does.
     """
     # TODO: Add a flag (default on) to seek past # comments before inserting
-    # frontmatter, for compatibility with shebangs and `# /// script` inline
-    # dependencies.
+    # frontmatter into a file that has none yet, for compatibility with shebangs and
+    # `# /// script` inline dependencies.
     if not metadata:
         return
 
@@ -339,27 +403,8 @@ def fmf_insert_frontmatter(
     # Prepare the new frontmatter.
     frontmatter_lines = [fm_style.start + "\n"]
     if frontmatter_str:
-        for line in frontmatter_str.splitlines():
+        for line in _split_lines(frontmatter_str):
             frontmatter_lines.append(fm_style.prefix + line + "\n")
     frontmatter_lines.append(fm_style.end + "\n")
 
-    tmp_path = f"{path}.fmf.insert.tmp"
-
-    try:
-        # Determine where any existing frontmatter ends (content_offset).
-        _, content_offset, _ = fmf_read_frontmatter_raw(path)
-
-        with open(tmp_path, "w", encoding="utf-8") as temp_file:
-            temp_file.writelines(frontmatter_lines)
-
-            with open(path, encoding="utf-8") as original_file:
-                original_file.seek(content_offset)
-                shutil.copyfileobj(original_file, temp_file)
-
-        os.replace(tmp_path, path)
-    except Exception as e:
-        try:
-            os.remove(tmp_path)
-        except FileNotFoundError:
-            pass
-        raise e
+    _rewrite_frontmatter(path, "insert", frontmatter_lines, fm_style)

@@ -1,4 +1,9 @@
+import builtins
+import os
+import stat
+import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -6,15 +11,17 @@ from frontmatter_format import YamlSerializationError, fmf_split_frontmatter
 from frontmatter_format.frontmatter_format import (
     FmFormatError,
     FmStyle,
+    fmf_has_frontmatter,
     fmf_insert_frontmatter,
     fmf_read,
     fmf_read_frontmatter,
     fmf_read_frontmatter_raw,
+    fmf_read_raw,
     fmf_strip_frontmatter,
     fmf_write,
 )
 from frontmatter_format.key_sort import custom_key_sort
-from frontmatter_format.yaml_util import dump_yaml
+from frontmatter_format.yaml_util import dump_yaml, to_yaml_string
 
 
 def test_fmf_basic(tmp_path: Path):
@@ -207,7 +214,7 @@ def test_fmf_write_rejects_cycles_without_leaving_files(tmp_path: Path):
         fmf_write(file_path, "Body\n", {"cyclic": cyclic_value})
 
     assert not file_path.exists()
-    assert not Path(f"{file_path}.fmf.write.tmp").exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_fmf_metadata(tmp_path: Path):
@@ -468,3 +475,467 @@ def test_fmf_split_frontmatter_rejects_non_format_line_separators(separator: str
     content = f"---{separator}title: Not frontmatter{separator}---{separator}body"
 
     assert fmf_split_frontmatter(content) == (None, 0, 0)
+
+
+# Writers split metadata only at the line endings the readers recognize (fmf-uj5a).
+
+# Characters `str.splitlines()` breaks at but the readers do not: the file reader's universal
+# newlines and the string reader split only at LF, CRLF and CR.
+NON_LINE_ENDING_SEPARATORS = ["\u2028", "\u2029", "\u0085", "\v", "\f", "\x1c", "\x1d", "\x1e"]
+SEPARATOR_IDS = ["LS", "PS", "NEL", "VT", "FF", "FS", "GS", "RS"]
+
+
+@pytest.mark.parametrize("separator", NON_LINE_ENDING_SEPARATORS, ids=SEPARATOR_IDS)
+@pytest.mark.parametrize("style", list(FmStyle))
+def test_fmf_write_raw_metadata_round_trips_separators(
+    tmp_path: Path, style: FmStyle, separator: str
+):
+    file_path = tmp_path / "doc.txt"
+    raw_metadata = f'a: "x{separator}y"\nb: 1\n'
+
+    fmf_write(file_path, "body\n", raw_metadata, style=style)
+
+    assert fmf_read_raw(file_path) == ("body\n", raw_metadata)
+
+
+@pytest.mark.parametrize("separator", NON_LINE_ENDING_SEPARATORS, ids=SEPARATOR_IDS)
+@pytest.mark.parametrize("style", list(FmStyle))
+def test_writers_round_trip_dict_metadata_with_separators(
+    tmp_path: Path, style: FmStyle, separator: str
+):
+    metadata = {"a": f"x{separator}y", "b": 1}
+
+    written = tmp_path / "written.txt"
+    fmf_write(written, "body\n", metadata, style=style)
+    assert fmf_read(written) == ("body\n", metadata)
+
+    inserted = tmp_path / "inserted.txt"
+    inserted.write_text("body\n", encoding="utf-8")
+    fmf_insert_frontmatter(inserted, metadata, fm_style=style)
+    assert fmf_read(inserted) == ("body\n", metadata)
+
+
+LINE_BREAK_CHARACTERS = {"NEL": "\x85", "LS": "\u2028", "PS": "\u2029", "CR": "\r", "CRLF": "\r\n"}
+
+
+def _c_printable(cp: int) -> bool:
+    """YAML 1.2's `c-printable` production."""
+    return (
+        cp in (0x09, 0x0A, 0x0D)
+        or 0x20 <= cp <= 0x7E
+        or cp == 0x85
+        or 0xA0 <= cp <= 0xD7FF
+        or 0xE000 <= cp <= 0xFFFD
+        or 0x10000 <= cp <= 0x10FFFF
+    )
+
+
+CONTROL_CHARACTERS = {
+    f"U+{cp:04X}": chr(cp)
+    for cp in range(0x10000)
+    if not _c_printable(cp) and not 0xD800 <= cp <= 0xDFFF
+}
+"""The 63 characters outside `c-printable` that UTF-8 can encode."""
+
+ESCAPED_CHARACTERS = {**LINE_BREAK_CHARACTERS, **CONTROL_CHARACTERS}
+
+_ESCAPED_SET = frozenset("\x85\u2028\u2029\r") | frozenset(CONTROL_CHARACTERS.values())
+
+
+@pytest.mark.usefixtures("yaml_reader")
+@pytest.mark.parametrize("char", ESCAPED_CHARACTERS.values(), ids=ESCAPED_CHARACTERS.keys())
+@pytest.mark.parametrize("style", list(FmStyle))
+def test_escaped_characters_in_metadata_values_round_trip(
+    tmp_path: Path, style: FmStyle, char: str
+):
+    # The YAML writer escapes these (fmf-jm7i, fmf-jrtu), so neither the frontmatter layer
+    # nor either YAML reader ever sees them raw.
+    assert len(CONTROL_CHARACTERS) == 63
+    metadata = {"a": f"x{char}y", "b": f"line one\nline two{char}end\n", "c": [f"{char}"]}
+    raw_metadata = to_yaml_string(metadata)
+    assert _ESCAPED_SET.isdisjoint(raw_metadata)
+
+    as_dict = tmp_path / "dict.txt"
+    fmf_write(as_dict, "body\n", metadata, style=style)
+    assert fmf_read(as_dict) == ("body\n", metadata)
+
+    as_raw = tmp_path / "raw.txt"
+    fmf_write(as_raw, "body\n", raw_metadata, style=style)
+    assert fmf_read_raw(as_raw) == ("body\n", raw_metadata)
+    assert fmf_read(as_raw) == ("body\n", metadata)
+
+    inserted = tmp_path / "inserted.txt"
+    inserted.write_text("body\n", encoding="utf-8")
+    fmf_insert_frontmatter(inserted, metadata, fm_style=style)
+    assert fmf_read(inserted) == ("body\n", metadata)
+    assert fmf_read_frontmatter(inserted) == metadata
+
+
+def test_fmf_write_raw_metadata_splits_at_lf_crlf_and_cr(tmp_path: Path):
+    file_path = tmp_path / "doc.py"
+
+    fmf_write(file_path, "body\n", "a: 1\r\nb: 2\rc: 3\nd: 4", style=FmStyle.hash)
+
+    assert file_path.read_bytes() == b"#---\n# a: 1\n# b: 2\n# c: 3\n# d: 4\n#---\nbody\n"
+
+
+# Insert and strip keep the `#` lines before hash-style frontmatter (fmf-21r5).
+
+HASH_PREAMBLE = (
+    "#!/usr/bin/env python\n"
+    "# /// script\n"
+    '# requires-python = ">=3.12"\n'
+    "# dependencies = []\n"
+    "# ///\n"
+    "# Copyright: café ☕\n"
+)
+
+
+def test_fmf_insert_frontmatter_keeps_hash_preamble(tmp_path: Path):
+    file_path = tmp_path / "script.py"
+    file_path.write_text(f"{HASH_PREAMBLE}#---\n# a: 1\n#---\nprint()\n", encoding="utf-8")
+
+    fmf_insert_frontmatter(file_path, {"b": 2}, fm_style=FmStyle.hash)
+
+    assert file_path.read_text(encoding="utf-8") == f"{HASH_PREAMBLE}#---\n# b: 2\n#---\nprint()\n"
+    assert fmf_read(file_path) == ("print()\n", {"b": 2})
+    _, _, metadata_start_offset = fmf_read_frontmatter_raw(file_path)
+    assert metadata_start_offset == len(HASH_PREAMBLE.encode("utf-8"))
+
+
+def test_fmf_strip_frontmatter_keeps_hash_preamble(tmp_path: Path):
+    file_path = tmp_path / "script.py"
+    file_path.write_text(f"{HASH_PREAMBLE}#---\n# a: 1\n#---\nprint()\n", encoding="utf-8")
+
+    fmf_strip_frontmatter(file_path)
+
+    assert file_path.read_text(encoding="utf-8") == f"{HASH_PREAMBLE}print()\n"
+
+
+def test_insert_and_strip_keep_long_crlf_hash_preamble(tmp_path: Path):
+    # A preamble longer than the text reader's chunk size, with CRLF line endings, which
+    # the writers normalize the same way as the body.
+    preamble_lines = [f"# preamble line {i}: {'ü' * 40}" for i in range(400)]
+    preamble = "".join(f"{line}\r\n" for line in preamble_lines)
+    file_path = tmp_path / "script.py"
+    file_path.write_bytes(f"{preamble}#---\r\n# a: 1\r\n#---\r\nbody\r\n".encode())
+    expected_preamble = "".join(f"{line}\n" for line in preamble_lines)
+
+    fmf_insert_frontmatter(file_path, {"b": 2}, fm_style=FmStyle.hash)
+    assert file_path.read_text(encoding="utf-8") == f"{expected_preamble}#---\n# b: 2\n#---\nbody\n"
+
+    fmf_strip_frontmatter(file_path)
+    assert file_path.read_text(encoding="utf-8") == f"{expected_preamble}body\n"
+
+
+@pytest.mark.parametrize("style", [s for s in FmStyle if s is not FmStyle.hash])
+def test_fmf_insert_frontmatter_rejects_non_hash_style_after_hash_preamble(
+    tmp_path: Path, style: FmStyle
+):
+    # Only hash-style frontmatter may follow `#` lines, so another style there would not
+    # read back, and dropping the lines would lose them.
+    file_path = tmp_path / "script.py"
+    original = f"{HASH_PREAMBLE}#---\n# a: 1\n#---\nprint()\n"
+    file_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(FmFormatError, match="hash-style"):
+        fmf_insert_frontmatter(file_path, {"b": 2}, fm_style=style)
+
+    assert file_path.read_text(encoding="utf-8") == original
+    assert list(tmp_path.iterdir()) == [file_path]
+
+
+# Writers keep the target's file mode (fmf-mkor).
+
+needs_posix_modes = pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+
+
+def _run_writer(writer: str, file_path: Path) -> None:
+    if writer == "fmf_write":
+        fmf_write(file_path, "print()\n", {"b": 2}, style=FmStyle.hash)
+    elif writer == "fmf_insert_frontmatter":
+        fmf_insert_frontmatter(file_path, {"b": 2}, fm_style=FmStyle.hash)
+    else:
+        fmf_strip_frontmatter(file_path)
+
+
+WRITERS = ["fmf_write", "fmf_insert_frontmatter", "fmf_strip_frontmatter"]
+
+
+@needs_posix_modes
+@pytest.mark.parametrize("mode", [0o755, 0o700, 0o600, 0o640, 0o444])
+@pytest.mark.parametrize("writer", WRITERS)
+def test_writers_keep_existing_file_mode(tmp_path: Path, writer: str, mode: int):
+    file_path = tmp_path / "script.py"
+    file_path.write_text("#---\n# a: 1\n#---\nprint()\n", encoding="utf-8")
+    file_path.chmod(mode)
+
+    _run_writer(writer, file_path)
+
+    assert stat.S_IMODE(file_path.stat().st_mode) == mode
+    assert list(tmp_path.iterdir()) == [file_path]
+
+
+@pytest.mark.parametrize("writer", WRITERS)
+def test_writers_still_write_where_chmod_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, writer: str
+):
+    # Some filesystems (some FUSE mounts, Android shared storage) refuse chmod. Keeping the
+    # mode is best effort there: the write still happens, as it did before modes were kept.
+    file_path = tmp_path / "script.py"
+    file_path.write_text("#---\n# a: 1\n#---\nprint()\n", encoding="utf-8")
+
+    def refuse_chmod(*_args: Any, **_kwargs: Any) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "chmod", refuse_chmod)
+    _run_writer(writer, file_path)
+    monkeypatch.undo()
+
+    expected = "print()\n" if writer == "fmf_strip_frontmatter" else "#---\n# b: 2\n#---\nprint()\n"
+    assert file_path.read_text(encoding="utf-8") == expected
+    assert list(tmp_path.iterdir()) == [file_path]
+
+
+@needs_posix_modes
+def test_fmf_write_gives_new_file_the_umask_default_mode(tmp_path: Path):
+    file_path = tmp_path / "new.md"
+    old_umask = os.umask(0o027)
+    try:
+        fmf_write(file_path, "body\n", {"a": 1})
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(file_path.stat().st_mode) == 0o640
+
+
+# Writers use unique temp files beside the target (fmf-roi5).
+
+
+def test_writers_use_unique_temp_files_beside_the_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    file_path = tmp_path / "doc.md"
+    file_path.write_text("---\na: 1\n---\nbody\n", encoding="utf-8")
+    replaced: list[tuple[Path, Path]] = []
+    real_replace = os.replace
+
+    def spy_replace(src: Any, dst: Any) -> None:
+        replaced.append((Path(src), Path(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", spy_replace)
+    for _ in range(2):
+        fmf_write(file_path, "body\n", {"a": 2})
+        fmf_insert_frontmatter(file_path, {"a": 3})
+        fmf_strip_frontmatter(file_path)
+
+    temp_paths = [src for src, _ in replaced]
+    assert len(replaced) == 6
+    assert len(set(temp_paths)) == len(temp_paths)
+    assert all(src.parent == tmp_path for src in temp_paths)
+    assert all(dst == file_path for _, dst in replaced)
+    assert list(tmp_path.iterdir()) == [file_path]
+
+
+def test_writers_leave_other_writers_temp_files_alone(tmp_path: Path):
+    file_path = tmp_path / "doc.md"
+    file_path.write_text("---\na: 1\n---\nbody\n", encoding="utf-8")
+    # Files at the fixed temp names earlier releases used, standing for another writer's
+    # temp file that is still being written.
+    others = {
+        tmp_path / f"doc.md.fmf.{name}.tmp": f"another {name} in progress\n"
+        for name in ("write", "insert", "strip")
+    }
+    for other_path, text in others.items():
+        other_path.write_text(text, encoding="utf-8")
+
+    fmf_write(file_path, "body\n", {"a": 2})
+    fmf_insert_frontmatter(file_path, {"a": 3})
+    fmf_strip_frontmatter(file_path)
+
+    assert file_path.read_text(encoding="utf-8") == "body\n"
+    for other_path, text in others.items():
+        assert other_path.read_text(encoding="utf-8") == text
+    assert sorted(tmp_path.iterdir()) == sorted([file_path, *others])
+
+
+def test_concurrent_fmf_write_to_one_target(tmp_path: Path):
+    file_path = tmp_path / "doc.md"
+    errors: list[BaseException] = []
+
+    def write_repeatedly(writer: int) -> None:
+        try:
+            for _ in range(25):
+                fmf_write(file_path, f"body {writer}\n", {"writer": writer})
+        except BaseException as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=write_repeatedly, args=(i,)) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    content, metadata = fmf_read(file_path)
+    assert metadata is not None
+    assert content == f"body {metadata['writer']}\n"
+    assert list(tmp_path.iterdir()) == [file_path]
+
+
+def test_fmf_insert_frontmatter_failure_leaves_file_and_no_temp(tmp_path: Path):
+    file_path = tmp_path / "binary.dat"
+    original = b"\xff\xfe not UTF-8 \x80\n"
+    file_path.write_bytes(original)
+
+    with pytest.raises(UnicodeDecodeError):
+        fmf_insert_frontmatter(file_path, {"a": 1})
+
+    assert file_path.read_bytes() == original
+    assert list(tmp_path.iterdir()) == [file_path]
+
+
+# Blank, comment-only and null frontmatter read as no metadata, like empty frontmatter
+# (fmf-9qzn).
+
+
+@pytest.mark.parametrize(
+    "file_text",
+    [
+        "---\n---\nbody\n",
+        "---\n\n---\nbody\n",
+        "---\n  \n\n---\nbody\n",
+        "---\n# only a comment\n---\nbody\n",
+        "---\n~\n---\nbody\n",
+        "---\nnull\n---\nbody\n",
+        "#---\n# # only a comment\n#---\nbody\n",
+        "#---\n# ~\n#---\nbody\n",
+    ],
+    ids=["empty", "blank", "whitespace", "comment", "tilde", "null", "hash-comment", "hash-tilde"],
+)
+def test_blank_comment_or_null_frontmatter_reads_as_none(tmp_path: Path, file_text: str):
+    file_path = tmp_path / "doc.md"
+    file_path.write_text(file_text, encoding="utf-8")
+
+    assert fmf_read(file_path) == ("body\n", None)
+    assert fmf_read_frontmatter(file_path) is None
+    assert fmf_has_frontmatter(file_path) is True
+
+
+@pytest.mark.parametrize("metadata_text", ["- one\n", "just text\n", "42\n", "false\n", "''\n"])
+def test_non_dict_non_null_metadata_still_raises(tmp_path: Path, metadata_text: str):
+    file_path = tmp_path / "doc.md"
+    file_path.write_text(f"---\n{metadata_text}---\nbody\n", encoding="utf-8")
+
+    with pytest.raises(FmFormatError, match="Expected YAML metadata to be a dict"):
+        fmf_read(file_path)
+    with pytest.raises(FmFormatError, match="Expected YAML metadata to be a dict"):
+        fmf_read_frontmatter(file_path)
+
+
+# fmf_has_frontmatter reports False, not an error, for an unclosed delimiter (fmf-0qru).
+
+
+@pytest.mark.parametrize("style", list(FmStyle))
+def test_fmf_has_frontmatter_detects_every_style(tmp_path: Path, style: FmStyle):
+    closed = tmp_path / "closed.txt"
+    closed.write_text(f"{style.start}\n{style.prefix}a: 1\n{style.end}\nbody\n", encoding="utf-8")
+    unclosed = tmp_path / "unclosed.txt"
+    unclosed.write_text(f"{style.start}\n{style.prefix}a: 1\nbody\n", encoding="utf-8")
+
+    assert fmf_has_frontmatter(closed) is True
+    assert fmf_has_frontmatter(unclosed) is False
+    # The strict readers still raise on the unclosed delimiter.
+    with pytest.raises(FmFormatError, match="end of frontmatter not found"):
+        fmf_read(unclosed)
+
+
+def test_fmf_has_frontmatter_false_for_markdown_thematic_break(tmp_path: Path):
+    file_path = tmp_path / "doc.md"
+    file_path.write_text("---\n\nA thematic break above, no closing delimiter.\n")
+
+    assert fmf_has_frontmatter(file_path) is False
+
+
+def test_fmf_has_frontmatter_other_cases(tmp_path: Path):
+    preamble = tmp_path / "preamble.py"
+    preamble.write_text(f"{HASH_PREAMBLE}#---\n# a: 1\n#---\nprint()\n", encoding="utf-8")
+    unclosed_preamble = tmp_path / "unclosed_preamble.py"
+    unclosed_preamble.write_text(f"{HASH_PREAMBLE}#---\n# a: 1\nprint()\n", encoding="utf-8")
+    plain = tmp_path / "plain.md"
+    plain.write_text("# Heading\n\nText.\n", encoding="utf-8")
+    empty = tmp_path / "empty.md"
+    empty.touch()
+    binary = tmp_path / "binary.dat"
+    binary.write_bytes(b"---\n\xff\xfe\x80\n---\n")
+
+    assert fmf_has_frontmatter(preamble) is True
+    assert fmf_has_frontmatter(unclosed_preamble) is False
+    assert fmf_has_frontmatter(plain) is False
+    assert fmf_has_frontmatter(empty) is False
+    assert fmf_has_frontmatter(binary) is False
+
+
+# fmf_read_raw opens the file once (fmf-hker), with the same results.
+
+
+def test_fmf_read_raw_opens_the_file_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    file_path = tmp_path / "doc.md"
+    file_path.write_text("---\na: 1\n---\nbody\n", encoding="utf-8")
+    opened: list[Path] = []
+    real_open = builtins.open
+
+    def spy_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(file, (str, Path)):
+            opened.append(Path(file))
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", spy_open)
+    result = fmf_read_raw(file_path)
+    monkeypatch.undo()
+
+    assert result == ("body\n", "a: 1\n")
+    assert opened == [file_path]
+
+
+@pytest.mark.parametrize(
+    ("file_text", "expected"),
+    [
+        ("---\na: 1\n---\nbody\n", ("body\n", "a: 1\n")),
+        ("---\r\na: 1\r\n---\r\nbody\r\n", ("body\n", "a: 1\n")),
+        ("---\na: 1\n---", ("", "a: 1\n")),
+        ("no frontmatter\n", ("no frontmatter\n", None)),
+        ("", ("", None)),
+        ("-----\nhello\n", ("-----\nhello\n", None)),
+        (f"{HASH_PREAMBLE}#---\n# a: 1\n#---\nprint()\n", ("print()\n", "a: 1\n")),
+        ("---\nt: café\n---\n" + "é" * 10000 + "\n", ("é" * 10000 + "\n", "t: café\n")),
+    ],
+    ids=["lf", "crlf", "no-body", "none", "empty", "five-dashes", "preamble", "long-body"],
+)
+def test_fmf_read_raw_results(tmp_path: Path, file_text: str, expected: tuple[str, str | None]):
+    file_path = tmp_path / "doc.txt"
+    file_path.write_bytes(file_text.encode("utf-8"))
+
+    assert fmf_read_raw(file_path) == expected
+
+
+@pytest.mark.parametrize(
+    "file_bytes",
+    [b"\xff\xfe\x80 binary\n", b"---\na: 1\n---\n" + b"x" * 20000 + b"\xff\n"],
+    ids=["binary", "bad-body"],
+)
+def test_fmf_read_raw_raises_on_non_utf8(tmp_path: Path, file_bytes: bytes):
+    file_path = tmp_path / "doc.dat"
+    file_path.write_bytes(file_bytes)
+
+    with pytest.raises(UnicodeDecodeError):
+        fmf_read_raw(file_path)
+
+
+def test_fmf_read_raw_raises_on_unclosed_delimiter(tmp_path: Path):
+    file_path = tmp_path / "doc.md"
+    file_path.write_text("---\na: 1\nbody\n", encoding="utf-8")
+
+    with pytest.raises(FmFormatError, match="end of frontmatter not found"):
+        fmf_read_raw(file_path)

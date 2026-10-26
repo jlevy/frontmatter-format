@@ -17,10 +17,11 @@ import ruamel.yaml
 import ruamel.yaml.main
 from ruamel.yaml import YAML, Representer
 from ruamel.yaml.composer import Composer
-from ruamel.yaml.nodes import CollectionNode, MappingNode
+from ruamel.yaml.nodes import CollectionNode, MappingNode, ScalarNode
 from ruamel.yaml.parser import Parser
-from ruamel.yaml.representer import RepresenterError
+from ruamel.yaml.representer import BaseRepresenter, RepresenterError
 
+from ._atomic_write import atomic_write_text
 from ._libyaml_guard import needs_pure_parser
 from .key_sort import KeySort
 
@@ -41,6 +42,39 @@ class YamlSerializationError(RepresenterError):
 
 def none_or_empty_dict(val: Any) -> bool:
     return val is None or val == {}
+
+
+_ESCAPE_ONLY_CHARACTERS = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff\ufffe\uffff]"
+)
+"""Characters only a double-quoted scalar keeps: those outside YAML 1.2's `c-printable`
+set (C0 controls but tab, LF and CR; DEL; C1 controls but NEL; surrogates; U+FFFE and
+U+FFFF), and NEL, LS, PS and CR, which are printable but read as line breaks.
+
+In other styles ruamel can write these raw, and a reader then takes a line break where the
+value had a character, or rejects the document: a NEL folded to a space, a CRLF in a
+literal block came back as LF, and a multi-line string holding a control character was
+written as a document that does not parse. Double-quoted, each is escaped (`\\0`,
+`\\x1F`, `\\N`, `\\L`, `\\P`, `\\r`, `\\uFFFE` and so on) and reads back exactly. For
+the characters outside `c-printable` this changes only output that did not read back:
+ruamel already double-quotes a plain string holding one when it has no line break.
+"""
+
+
+class _EscapingRepresenter(BaseRepresenter):
+    """
+    Base for each `new_yaml` instance's own representer class: writes a scalar whose text
+    holds a character in `_ESCAPE_ONLY_CHARACTERS` double-quoted, where ruamel escapes it,
+    so it reads back exactly. Every other scalar is represented as ruamel would represent
+    it, byte for byte.
+    """
+
+    def represent_scalar(  # pyright: ignore[reportImplicitOverride]
+        self, tag: Any, value: Any, style: Any = None, anchor: Any = None
+    ) -> ScalarNode:
+        if style != '"' and isinstance(value, str) and _ESCAPE_ONLY_CHARACTERS.search(value):
+            style = '"'
+        return super().represent_scalar(tag, value, style=style, anchor=anchor)
 
 
 YamlCustomizer = Callable[[YAML], None]
@@ -94,6 +128,13 @@ def new_yaml(
     unchanged. Use `add_default_yaml_representer` or `add_default_yaml_customizer` to
     reach every instance built afterwards.
 
+    A string that holds a character outside YAML 1.2's `c-printable` set, or a NEL, LS,
+    PS or CR, is always written double-quoted with escapes such as `\\0`, `\\x1F`,
+    `\\N`, `\\L`, `\\P` and `\\r`, whatever style was asked for: in other styles ruamel
+    writes those characters raw, and they read back as line breaks or make the document
+    unreadable. Together that is every control character but tab and LF, and LS, PS,
+    U+FFFE, U+FFFF and surrogates. Every other string is written as ruamel writes it.
+
     The instance always uses ruamel's pure-Python parser and emitter, even when ruamel's
     optional C extension is installed, so its reading and its output bytes do not depend
     on what else is installed. `from_yaml_string`, `read_yaml_file` and the frontmatter
@@ -107,8 +148,9 @@ def new_yaml(
     # mid-dump on another thread, and a constructor a customizer registers would reach every
     # loader in the process. A private subclass of each keeps them with this instance;
     # ruamel builds the representer and constructor from these lazily. (`typ="full"` has
-    # no constructor: it is for dumping only.)
-    yaml.Representer = type(yaml.Representer.__name__, (yaml.Representer,), {})
+    # no constructor: it is for dumping only.) The representer subclass also escapes the
+    # characters only a double-quoted scalar keeps (`_EscapingRepresenter`).
+    yaml.Representer = type(yaml.Representer.__name__, (_EscapingRepresenter, yaml.Representer), {})
     if yaml.Constructor is not None:
         yaml.Constructor = type(yaml.Constructor.__name__, (yaml.Constructor,), {})
     yaml.default_flow_style = False  # Block style dictionaries.
@@ -603,21 +645,17 @@ def write_yaml_file(
 ) -> None:
     """
     Write the given value to the YAML file, creating it atomically.
+
+    Writes through a uniquely named temp file in the same directory, as the frontmatter
+    writers do. A file that is replaced keeps its mode where the filesystem allows it; a new
+    file gets the default mode (0o666 less the umask).
     """
-    path = Path(path)
-    temp_path = path.with_suffix(".yml.tmp")
-    try:
-        temp_path.write_text(
-            to_yaml_string(
-                value,
-                key_sort,
-                stringify_unknown=stringify_unknown,
-                typ=typ,
-                allow_aliases=allow_aliases,
-            ),
-            encoding="utf-8",
-        )
-        temp_path.replace(path)
-    except Exception:
-        temp_path.unlink(missing_ok=True)
-        raise
+    text = to_yaml_string(
+        value,
+        key_sort,
+        stringify_unknown=stringify_unknown,
+        typ=typ,
+        allow_aliases=allow_aliases,
+    )
+    with atomic_write_text(path, "yaml") as stream:
+        stream.write(text)
