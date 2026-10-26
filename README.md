@@ -290,8 +290,9 @@ macOS and Windows. ruamel.yaml 0.18 depended on it on CPython below a Python-ver
 (<3.13 for 0.18.0–0.18.10, <3.14 for 0.18.11–0.18.16, <3.15 for 0.18.17); since 0.19.1
 it is opt-in (the `oldlibyaml` extra).
 The newer `ruamel.yaml.clibz` is the same libyaml, compiled with Zig at install time and
-published only as source; ruamel’s `YAML()` API does not use it, so it gives no speedup
-here. libyaml parses YAML 1.1 and pure ruamel YAML 1.2, so they disagree on some texts;
+published only as source; ruamel’s `YAML()` API does not use it, and the readers would
+stay pure if a release did, so it gives no speedup here.
+libyaml parses YAML 1.1 and pure ruamel YAML 1.2, so they disagree on some texts;
 the readers (`fmf_read`, `fmf_read_frontmatter`, `from_yaml_string` and
 `read_yaml_file`) give libyaml only the texts on which the two were shown to agree, and
 read the rest, and anything libyaml rejects, with pure ruamel (see
@@ -336,9 +337,9 @@ libyaml fails on, or composes to a document nested more than 100 levels deep or 
 a node, is read again by pure ruamel.
 The result is meant to be pure ruamel’s in every case: value, types, key order and
 errors. The list of shapes rests on a differential search over millions of generated and
-mutated documents, not on a proof, so the C parser is used only with libyaml 0.1.7 on
-ruamel.yaml 0.18 or 0.19, the build and releases that search covered; with any other
-build the readers report `"pure"` and use pure ruamel.
+mutated documents, not on a proof, so the C parser is used only with clib’s libyaml
+0.1.7 on ruamel.yaml 0.18 or 0.19, the build and releases that search covered; with any
+other build, clibz included, the readers report `"pure"` and use pure ruamel.
 Two differences that change no value remain: a warning issued while libyaml reads
 carries libyaml’s source marks, and a tag constructor registered through a customizer
 that raises runs on the libyaml attempt and again on the pure re-read.

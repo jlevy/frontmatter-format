@@ -16,6 +16,7 @@ import random
 import re
 import subprocess
 import sys
+import types
 from collections.abc import Callable, Iterable, Iterator
 from datetime import date, datetime
 from io import StringIO
@@ -1125,12 +1126,102 @@ def test_no_libyaml_version_without_the_extension(monkeypatch: pytest.MonkeyPatc
     assert yaml_util._installed_libyaml_version() is None  # pyright: ignore[reportPrivateUsage]
 
 
+CLIBZ_MODULES = ["_ruamel_yaml_clibz", "ruamel.yaml.clibz._ruamel_yaml_clibz"]
+"""The names `ruamel.yaml.clibz` builds its parser under: the same libyaml 0.1.7 sources,
+compiled with Zig and a free-threading flag, which the guards were never searched against."""
+
+
+def _c_module(name: str, parser: type) -> types.ModuleType:
+    """A module `name` holding `parser` as its `CParser` and reporting libyaml
+    `CHECKED_LIBYAML_VERSION`, as both clib and clibz do."""
+    module = types.ModuleType(name)
+    module.CParser = parser  # pyright: ignore[reportAttributeAccessIssue]
+    module.get_version_string = lambda: CHECKED_LIBYAML_VERSION  # pyright: ignore[reportAttributeAccessIssue]
+    return module
+
+
+def _use_c_parser_from(
+    monkeypatch: pytest.MonkeyPatch, name: str, registered: type | None = None
+) -> None:
+    """Make a class defined in module `name` ruamel's C parser, as a ruamel release whose
+    `YAML()` imported it would, and register that module holding `registered` (by default
+    the parser itself)."""
+    parser = type("CParser", (), {"__module__": name})
+    monkeypatch.setitem(sys.modules, name, _c_module(name, registered or parser))
+    monkeypatch.setattr(yaml_util, "_CParser", parser)
+    monkeypatch.delenv(PURE_ENV, raising=False)
+
+
+@pytest.mark.parametrize(
+    ("name", "clib"),
+    [(name, True) for name in yaml_util.CHECKED_C_PARSER_MODULES]
+    + [(name, False) for name in CLIBZ_MODULES],
+)
+def test_only_clibs_parser_counts_as_the_checked_build(
+    name: str, clib: bool, monkeypatch: pytest.MonkeyPatch
+):
+    """A parser from clibz reports the same libyaml version as clib's, so only its module
+    tells it apart; it must leave the readers pure. clib's two module names, faked the same
+    way, show that the version alone would have let it through."""
+    _use_c_parser_from(monkeypatch, name)
+    ruamel_checked = yaml_util._ruamel_is_checked()  # pyright: ignore[reportPrivateUsage]
+    expected_version = CHECKED_LIBYAML_VERSION if clib else None
+    assert yaml_util._installed_libyaml_version() == expected_version  # pyright: ignore[reportPrivateUsage]
+    checked = yaml_util._c_parser_is_checked()  # pyright: ignore[reportPrivateUsage]
+    assert checked is (clib and ruamel_checked)
+    monkeypatch.setattr(yaml_util, "_C_PARSER_CHECKED", checked)
+    assert yaml_parser_mode() == ("c-first" if clib and ruamel_checked else "pure")
+
+
+@pytest.mark.parametrize("name", yaml_util.CHECKED_C_PARSER_MODULES)
+def test_a_clib_name_counts_only_for_the_parser_its_module_holds(
+    name: str, monkeypatch: pytest.MonkeyPatch
+):
+    """The version is read from the module that defines the parser, never from a module
+    that carries clib's name, or the `_ruamel_yaml` fallback, but holds another parser."""
+    other = type("CParser", (), {"__module__": name})
+    monkeypatch.setitem(sys.modules, "_ruamel_yaml", _c_module("_ruamel_yaml", other))
+    _use_c_parser_from(monkeypatch, name, registered=other)
+    assert yaml_util._installed_libyaml_version() is None  # pyright: ignore[reportPrivateUsage]
+    assert not yaml_util._c_parser_is_checked()  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize("name", ["_ruamel_yaml", *CLIBZ_MODULES])
+def test_a_yaml_that_used_clibzs_parser_would_leave_the_readers_pure(name: str):
+    """The case behind the module check, end to end: a later ruamel release whose `YAML()`
+    imported clibz's parser. The process patches `ruamel.yaml.main.CParser` before importing
+    this package, so the gate decides at import as it would there. clib's name, faked the
+    same way, is the control: it reads C-first."""
+    code = (
+        "import sys, types\n"
+        "import ruamel.yaml.main\n"
+        f"name = {name!r}\n"
+        "parser = type('CParser', (), {'__module__': name})\n"
+        "module = types.ModuleType(name)\n"
+        "module.CParser = parser\n"
+        "module.get_version_string = lambda: '0.1.7'\n"
+        "sys.modules[name] = module\n"
+        "ruamel.yaml.main.CParser = parser\n"
+        "from frontmatter_format import yaml_util\n"
+        "print(yaml_util.yaml_parser_mode(), yaml_util._C_PARSER_CHECKED)\n"
+    )
+    env = {key: value for key, value in os.environ.items() if key != PURE_ENV}
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env
+    )
+    clib = name == "_ruamel_yaml" and yaml_util._ruamel_is_checked()  # pyright: ignore[reportPrivateUsage]
+    assert out.stdout.split() == (["c-first", "True"] if clib else ["pure", "False"])
+
+
 @requires_c
 @pytest.mark.usefixtures("pure_switch")
 def test_the_installed_extension_is_the_checked_build():
     """CI installs the extension; a clib release with another libyaml must fail here, so that
     the search behind the guards is rerun before the gate is widened."""
+    assert C_PARSER.__module__ in yaml_util.CHECKED_C_PARSER_MODULES
+    assert getattr(yaml_util._clib_module(), "CParser", None) is C_PARSER  # pyright: ignore[reportPrivateUsage]
     assert yaml_util._installed_libyaml_version() == CHECKED_LIBYAML_VERSION  # pyright: ignore[reportPrivateUsage]
+    assert yaml_util._c_parser_is_checked()  # pyright: ignore[reportPrivateUsage]
     assert yaml_util._C_PARSER_CHECKED  # pyright: ignore[reportPrivateUsage]
     assert yaml_parser_mode() == "c-first"
 
