@@ -424,18 +424,56 @@ def test_write_yaml_file_failure_leaves_target_and_no_temp(tmp_path: Path):
     assert list(tmp_path.iterdir()) == [file_path]
 
 
-# A string holding NEL, LS, PS or CR is written double-quoted with escapes, so it reads back
-# exactly; every other string is written as before (fmf-jm7i).
+# A string holding NEL, LS, PS, CR or a character outside YAML 1.2's c-printable set is
+# written double-quoted with escapes, so it reads back exactly; every other string is
+# written as before (fmf-jm7i, fmf-jrtu).
 
-LINE_BREAK_CHARACTERS = {"NEL": "\x85", "LS": " ", "PS": " ", "CR": "\r", "CRLF": "\r\n"}
+LINE_BREAK_CHARACTERS = {"NEL": "\x85", "LS": "\u2028", "PS": "\u2029", "CR": "\r", "CRLF": "\r\n"}
 
-ESCAPED_ONLY = ("\x85", " ", " ", "\r")
+
+def _c_printable(cp: int) -> bool:
+    """YAML 1.2's `c-printable` production."""
+    return (
+        cp in (0x09, 0x0A, 0x0D)
+        or 0x20 <= cp <= 0x7E
+        or cp == 0x85
+        or 0xA0 <= cp <= 0xD7FF
+        or 0xE000 <= cp <= 0xFFFD
+        or 0x10000 <= cp <= 0x10FFFF
+    )
+
+
+CONTROL_CHARACTERS = {
+    f"U+{cp:04X}": chr(cp)
+    for cp in range(0x10000)
+    if not _c_printable(cp) and not 0xD800 <= cp <= 0xDFFF
+}
+"""The characters outside `c-printable` that UTF-8 can encode: C0 controls but tab, LF and
+CR, DEL, C1 controls but NEL, U+FFFE and U+FFFF."""
+
+ESCAPED_CHARACTERS = {**LINE_BREAK_CHARACTERS, **CONTROL_CHARACTERS}
+
+_ESCAPED_SET = (
+    frozenset("\x85\u2028\u2029\r")
+    | frozenset(CONTROL_CHARACTERS.values())
+    | frozenset(chr(cp) for cp in range(0xD800, 0xE000))
+)
+"""Every single character the writer escapes, surrogates included (CRLF is CR then LF)."""
+
+
+def _has_escaped_character(text: str) -> bool:
+    return not _ESCAPED_SET.isdisjoint(text)
+
+
+def test_control_characters_are_the_63_outside_c_printable():
+    assert len(CONTROL_CHARACTERS) == 63
+    assert "\t" not in _ESCAPED_SET and "\n" not in _ESCAPED_SET and "\ufeff" not in _ESCAPED_SET
 
 
 @pytest.mark.usefixtures("yaml_reader")
-@pytest.mark.parametrize("char", LINE_BREAK_CHARACTERS.values(), ids=LINE_BREAK_CHARACTERS.keys())
+@pytest.mark.parametrize("char", ESCAPED_CHARACTERS.values(), ids=ESCAPED_CHARACTERS.keys())
 @pytest.mark.parametrize("typ", ["rt", "safe"])
-def test_line_break_characters_in_values_round_trip(typ: YamlTyp, char: str):
+def test_escaped_characters_in_values_round_trip(typ: YamlTyp, char: str):
     value = {
         "inside": f"x{char}y",
         "edges": f"{char}x{char}",
@@ -447,19 +485,19 @@ def test_line_break_characters_in_values_round_trip(typ: YamlTyp, char: str):
 
     text = to_yaml_string(value, typ=typ)
 
-    assert not any(c in text for c in ESCAPED_ONLY)
+    assert not _has_escaped_character(text)
     assert from_yaml_string(text) == value
 
 
-@pytest.mark.parametrize("char", LINE_BREAK_CHARACTERS.values(), ids=LINE_BREAK_CHARACTERS.keys())
-def test_line_break_characters_in_keys_and_other_scalars_round_trip(char: str):
+@pytest.mark.parametrize("char", ESCAPED_CHARACTERS.values(), ids=ESCAPED_CHARACTERS.keys())
+def test_escaped_characters_in_keys_and_other_scalars_round_trip(char: str):
     class Unknown:
         def __str__(self) -> str:  # pyright: ignore[reportImplicitOverride]
             return f"unknown{char}object"
 
     value = {f"key{char}": 1, "nested": {f"{char}": [f"v{char}"]}}
     text = to_yaml_string(value)
-    assert not any(c in text for c in ESCAPED_ONLY)
+    assert not _has_escaped_character(text)
     assert from_yaml_string(text) == value
 
     # ruamel's round-trip string types keep their own style unless it would lose the value.
@@ -472,15 +510,23 @@ def test_line_break_characters_in_keys_and_other_scalars_round_trip(char: str):
     ):
         typed = {"a": scalar_type(f"x{char}y\nz")}
         typed_text = to_yaml_string(typed)
-        assert not any(c in typed_text for c in ESCAPED_ONLY), scalar_type
+        assert not _has_escaped_character(typed_text), scalar_type
         assert from_yaml_string(typed_text) == {"a": f"x{char}y\nz"}, scalar_type
 
     unknown_text = to_yaml_string({"u": Unknown()}, stringify_unknown=True)
     assert from_yaml_string(unknown_text) == {"u": f"unknown{char}object"}
 
 
-def test_line_break_characters_use_yaml_escapes():
-    assert to_yaml_string({"a": "1\x852 3 4\r5\r\n6"}) == 'a: "1\\N2\\L3\\P4\\r5\\r\\n6"\n'
+def test_escaped_characters_use_yaml_escapes():
+    line_breaks = "1\x852\u20283\u20294\r5\r\n6"
+    assert to_yaml_string({"a": line_breaks}) == 'a: "1\\N2\\L3\\P4\\r5\\r\\n6"\n'
+    controls = "\x00\x07\x08\x0b\x0c\x0e\x1b\x1f\x7f\x80\x9f\ufffe\uffff"
+    assert to_yaml_string({"a": f"{controls}\ttab\nb"}) == (
+        'a: "\\0\\a\\b\\v\\f\\x0E\\e\\x1F\\x7F\\x80\\x9F\\uFFFE\\uFFFF\\ttab\\nb"\n'
+    )
+    # A tab is printable, so a string whose only special character is a tab keeps
+    # ruamel's own output.
+    assert to_yaml_string({"a": "x\ty\nz"}) == "a: |-\n  x\ty\n  z\n"
 
 
 def test_line_break_escaping_stays_with_new_yaml_instances():
@@ -503,9 +549,8 @@ def _without_escape_step(yaml: YAML) -> YAML:
 
 
 _CORPUS_ALPHABET = (
-    "abcxyzABC019 _-.,:;?!#&*|>'\"%@`\\/[]{}()~=+$^<"
-    + "\n\t\x00\x07\x08\x0b\x0c\x1b\x1c\x1d\x1e\x7f"
-    + "\xa0éüß́—“”‘’☕﻿퟿�😀\U0010fffd"
+    "abcxyzABC019 _-.,:;?!#&*|>'\"%@`\\/[]{}()~=+$^<\n\t"
+    + "\xa0éüß\u0301—“”‘’☕\ufeff\ud7ff\ue000\ufffd😀\U0010fffd"
 )
 
 _CORPUS_WORDS = [
@@ -514,14 +559,15 @@ _CORPUS_WORDS = [
     "12:30", "- a", "a: b", "a:b", "#x", "x #y", "? x", "[a]", "{a: 1}", "&a", "*a", "!t",
     "%TAG", "---", "...", " leading", "trailing ", "multi\nline", "multi\nline\n",
     "trailing newlines\n\n\n", "\n", "\n\n", "\nleading newline", "tab\there", "\ttab first",
-    "back\\slash", "quote's", 'double "quote"', "unicode café ☕ 😀", "bom﻿here",
+    "back\\slash", "quote's", 'double "quote"', "unicode café ☕ 😀", "bom\ufeffhere",
     "x" * 200, ("word " * 40).strip(), "line\n  indented\n\tand tabbed\n",
 ]  # fmt: skip
 
 
 def _corpus_strings() -> list[str]:
-    """Strings without NEL, LS, PS or CR: hand-picked YAML-special words, every string
-    constant in the test suite, and seeded random strings over a wide alphabet."""
+    """Strings with none of `ESCAPED_CHARACTERS`: hand-picked YAML-special words, every
+    string constant in the test suite, and seeded random strings over a wide alphabet of
+    printable characters, tab and LF."""
     strings = list(_CORPUS_WORDS)
     for path in sorted(Path(__file__).parent.glob("*.py")):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -531,11 +577,10 @@ def _corpus_strings() -> list[str]:
     for _ in range(3000):
         length = rng.choice([1, 2, 3, 5, 8, 13, 40, 90, 150])
         strings.append("".join(rng.choice(_CORPUS_ALPHABET) for _ in range(length)))
-    kept = [s for s in dict.fromkeys(strings) if not any(c in s for c in ESCAPED_ONLY)]
-    return kept
+    return [s for s in dict.fromkeys(strings) if not _has_escaped_character(s)]
 
 
-def test_strings_without_line_break_characters_keep_their_output_bytes():
+def test_strings_without_escaped_characters_keep_their_output_bytes():
     strings = _corpus_strings()
     assert len(strings) > 3000
     mismatches: list[tuple[str, str, str]] = []
@@ -548,3 +593,54 @@ def test_strings_without_line_break_characters_keep_their_output_bytes():
                 if out != _dump(before, value):
                     mismatches.append((typ, s, out))
     assert mismatches == []
+
+
+def _dump_or_none(yaml: YAML, value: object) -> str | None:
+    try:
+        return _dump(yaml, value)
+    except Exception:  # ruamel's folded-block emitter can raise on these strings.
+        return None
+
+
+def _reads_back(text: str | None, value: object) -> bool:
+    if text is None:
+        return False
+    try:
+        return from_yaml_string(text) == value
+    except Exception:
+        return False
+
+
+@pytest.mark.parametrize("typ", ["rt", "safe"])
+def test_escaping_non_printable_characters_changes_only_output_that_did_not_read_back(
+    typ: YamlTyp,
+):
+    surrogates = ["\ud800", "\udbff", "\udc00", "\udfff"]
+    templates = ["x{c}y", "{c}", " {c} ", "{c}\n", "a\nb{c}c", "line one\nline{c}two\n"]
+    kinds: list[type[str]] = [str]
+    if typ == "rt":
+        kinds += [
+            LiteralScalarString,
+            FoldedScalarString,
+            SingleQuotedScalarString,
+            DoubleQuotedScalarString,
+            PlainScalarString,
+        ]
+    writer = new_yaml(typ=typ)
+    before = _without_escape_step(new_yaml(typ=typ))
+    changed = 0
+    for char in [*CONTROL_CHARACTERS.values(), *surrogates]:
+        for template in templates:
+            text = template.format(c=char)
+            for kind in kinds:
+                for value, expected in (
+                    ({"k": kind(text)}, {"k": text}),
+                    ({kind(text): 1}, {text: 1}),
+                ):
+                    new = _dump_or_none(writer, value)
+                    old = _dump_or_none(before, value)
+                    assert _reads_back(new, expected), (char, template, kind, new)
+                    if new != old:
+                        changed += 1
+                        assert not _reads_back(old, expected), (char, template, kind, old)
+    assert changed > 0

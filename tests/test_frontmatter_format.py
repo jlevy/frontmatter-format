@@ -481,7 +481,7 @@ def test_fmf_split_frontmatter_rejects_non_format_line_separators(separator: str
 
 # Characters `str.splitlines()` breaks at but the readers do not: the file reader's universal
 # newlines and the string reader split only at LF, CRLF and CR.
-NON_LINE_ENDING_SEPARATORS = [" ", " ", "\u0085", "\v", "\f", "\x1c", "\x1d", "\x1e"]
+NON_LINE_ENDING_SEPARATORS = ["\u2028", "\u2029", "\u0085", "\v", "\f", "\x1c", "\x1d", "\x1e"]
 SEPARATOR_IDS = ["LS", "PS", "NEL", "VT", "FF", "FS", "GS", "RS"]
 
 
@@ -518,17 +518,42 @@ def test_writers_round_trip_dict_metadata_with_separators(
 LINE_BREAK_CHARACTERS = {"NEL": "\x85", "LS": "\u2028", "PS": "\u2029", "CR": "\r", "CRLF": "\r\n"}
 
 
+def _c_printable(cp: int) -> bool:
+    """YAML 1.2's `c-printable` production."""
+    return (
+        cp in (0x09, 0x0A, 0x0D)
+        or 0x20 <= cp <= 0x7E
+        or cp == 0x85
+        or 0xA0 <= cp <= 0xD7FF
+        or 0xE000 <= cp <= 0xFFFD
+        or 0x10000 <= cp <= 0x10FFFF
+    )
+
+
+CONTROL_CHARACTERS = {
+    f"U+{cp:04X}": chr(cp)
+    for cp in range(0x10000)
+    if not _c_printable(cp) and not 0xD800 <= cp <= 0xDFFF
+}
+"""The 63 characters outside `c-printable` that UTF-8 can encode."""
+
+ESCAPED_CHARACTERS = {**LINE_BREAK_CHARACTERS, **CONTROL_CHARACTERS}
+
+_ESCAPED_SET = frozenset("\x85\u2028\u2029\r") | frozenset(CONTROL_CHARACTERS.values())
+
+
 @pytest.mark.usefixtures("yaml_reader")
-@pytest.mark.parametrize("char", LINE_BREAK_CHARACTERS.values(), ids=LINE_BREAK_CHARACTERS.keys())
+@pytest.mark.parametrize("char", ESCAPED_CHARACTERS.values(), ids=ESCAPED_CHARACTERS.keys())
 @pytest.mark.parametrize("style", list(FmStyle))
-def test_line_break_characters_in_metadata_values_round_trip(
+def test_escaped_characters_in_metadata_values_round_trip(
     tmp_path: Path, style: FmStyle, char: str
 ):
-    # The YAML writer escapes these (fmf-jm7i), so neither the frontmatter layer nor either
-    # YAML reader ever sees them raw.
+    # The YAML writer escapes these (fmf-jm7i, fmf-jrtu), so neither the frontmatter layer
+    # nor either YAML reader ever sees them raw.
+    assert len(CONTROL_CHARACTERS) == 63
     metadata = {"a": f"x{char}y", "b": f"line one\nline two{char}end\n", "c": [f"{char}"]}
     raw_metadata = to_yaml_string(metadata)
-    assert not any(c in raw_metadata for c in ("\x85", "\u2028", "\u2029", "\r"))
+    assert _ESCAPED_SET.isdisjoint(raw_metadata)
 
     as_dict = tmp_path / "dict.txt"
     fmf_write(as_dict, "body\n", metadata, style=style)

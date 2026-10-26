@@ -44,21 +44,29 @@ def none_or_empty_dict(val: Any) -> bool:
     return val is None or val == {}
 
 
-_ESCAPE_ONLY_CHARACTERS = re.compile("[\x85\u2028\u2029\r]")
-"""Characters only a double-quoted scalar keeps: NEL, LS, PS and CR.
+_ESCAPE_ONLY_CHARACTERS = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff\ufffe\uffff]"
+)
+"""Characters only a double-quoted scalar keeps: those outside YAML 1.2's `c-printable`
+set (C0 controls but tab, LF and CR; DEL; C1 controls but NEL; surrogates; U+FFFE and
+U+FFFF), and NEL, LS, PS and CR, which are printable but read as line breaks.
 
-ruamel writes them raw in every other style, and a reader then takes them as line breaks,
-so the value reads back changed: a NEL folds to a space, a CRLF in a literal block becomes
-LF, and a NEL in a literal block can make the document unreadable.
+In other styles ruamel can write these raw, and a reader then takes a line break where the
+value had a character, or rejects the document: a NEL folded to a space, a CRLF in a
+literal block came back as LF, and a multi-line string holding a control character was
+written as a document that does not parse. Double-quoted, each is escaped (`\\0`,
+`\\x1F`, `\\N`, `\\L`, `\\P`, `\\r`, `\\uFFFE` and so on) and reads back exactly. For
+the characters outside `c-printable` this changes only output that did not read back:
+ruamel already double-quotes a plain string holding one when it has no line break.
 """
 
 
 class _EscapingRepresenter(BaseRepresenter):
     """
     Base for each `new_yaml` instance's own representer class: writes a scalar whose text
-    holds a NEL, LS, PS or CR double-quoted, where ruamel escapes them (`\\N`, `\\L`,
-    `\\P`, `\\r`), so it reads back exactly. Every other scalar is represented as ruamel
-    would represent it, byte for byte.
+    holds a character in `_ESCAPE_ONLY_CHARACTERS` double-quoted, where ruamel escapes it,
+    so it reads back exactly. Every other scalar is represented as ruamel would represent
+    it, byte for byte.
     """
 
     def represent_scalar(  # pyright: ignore[reportImplicitOverride]
@@ -120,10 +128,12 @@ def new_yaml(
     unchanged. Use `add_default_yaml_representer` or `add_default_yaml_customizer` to
     reach every instance built afterwards.
 
-    A string that holds a NEL, LS, PS or CR is always written double-quoted, with the
-    escapes `\\N`, `\\L`, `\\P` and `\\r`, whatever style was asked for: in any other
-    style ruamel writes those characters raw and they read back as line breaks. Every other
-    string is written as ruamel writes it.
+    A string that holds a character outside YAML 1.2's `c-printable` set, or a NEL, LS,
+    PS or CR, is always written double-quoted with escapes such as `\\0`, `\\x1F`,
+    `\\N`, `\\L`, `\\P` and `\\r`, whatever style was asked for: in other styles ruamel
+    writes those characters raw, and they read back as line breaks or make the document
+    unreadable. Together that is every control character but tab and LF, and LS, PS,
+    U+FFFE, U+FFFF and surrogates. Every other string is written as ruamel writes it.
 
     The instance always uses ruamel's pure-Python parser and emitter, even when ruamel's
     optional C extension is installed, so its reading and its output bytes do not depend
