@@ -16,6 +16,7 @@ import random
 import re
 import subprocess
 import sys
+import types
 from collections.abc import Callable, Iterable, Iterator
 from datetime import date, datetime
 from io import StringIO
@@ -783,6 +784,81 @@ def test_nesting_bound_is_an_upper_bound_and_small_on_ordinary_documents():
     assert bound("k: [a]\n" * (limit // 2)) <= limit  # Wide, not deep: stays on libyaml.
 
 
+LOOKBEHIND_FIRST = {
+    "_FLOW_OPEN": re.compile(r"(?<![^ \t\r\n\[{,:?])[\[{]"),
+    "_INDICATOR_CHAIN": re.compile(r"(?:[-?] +)+"),
+    "_LINE_INDENT": re.compile(r"(?<![^\r\n]) +"),
+}
+"""`_nesting_bound`'s regexes as v0.5.0 wrote them, before they were rewritten to start with
+their literal character."""
+
+
+def _nesting_texts() -> list[str]:
+    """Texts for comparing forms of the nesting bound: random strings over the characters it
+    counts, the fuzz generator's documents, and the suite's own corpus."""
+    from devtools.yaml_parser_fuzz import Generator
+
+    rng = random.Random(5)
+    alphabet = " \n\r-?[{,:\t\x85ab"
+    texts = ["".join(rng.choices(alphabet, k=rng.randint(0, 40))) for _ in range(20_000)]
+    texts += list(Generator(random.Random(11)).texts(5_000, []))
+    texts += ORDINARY + list(LIBYAML_DIFFERS.values())
+    texts += ["", " ", "\n", "  \n", "\r  x", "-", "- - -", "? - ? x", "[{", " [", "x\r\n   y"]
+    return texts
+
+
+def test_the_literal_first_regexes_match_exactly_what_the_lookbehind_first_ones_did():
+    texts = _nesting_texts()
+    for name, before in LOOKBEHIND_FIRST.items():
+        after: re.Pattern[str] = getattr(yaml_util, name)
+        assert after.pattern != before.pattern
+        for text in texts:
+            spans = [m.span() for m in after.finditer(text)]
+            assert spans == [m.span() for m in before.finditer(text)], (name, text)
+
+
+def test_the_count_shortcut_gives_the_exact_bounds_decision(monkeypatch: pytest.MonkeyPatch):
+    """`_nests_within` answers `_nesting_bound(text) <= limit` from character counts where it
+    can; it must never answer differently, and both of its branches must be exercised."""
+    exact = yaml_util._nesting_bound  # pyright: ignore[reportPrivateUsage]
+    within = yaml_util._nests_within  # pyright: ignore[reportPrivateUsage]
+    exact_calls: list[str] = []
+
+    def counting(text: str) -> int:
+        exact_calls.append(text)
+        return exact(text)
+
+    monkeypatch.setattr(yaml_util, "_nesting_bound", counting)
+    scan = yaml_util._C_SCAN_DEPTH  # pyright: ignore[reportPrivateUsage]
+    shortcuts = 0
+    for text in _nesting_texts()[::4]:
+        for limit in (0, 1, 2, 3, 5, 8, 13, 21, 34, 55, scan):
+            before = len(exact_calls)
+            assert within(text, limit) is (exact(text) <= limit), (text, limit)
+            shortcuts += len(exact_calls) == before
+    assert shortcuts and exact_calls
+
+    # The edge of the shortcut: with nothing else counted and no other space, an indent of
+    # `(limit - 2) // 2` spaces is the deepest it accepts, and one more leaves the decision to
+    # the exact bound.
+    for limit in range(2, 12):
+        edge = (limit - 2) // 2
+        for spaces in range(max(edge - 1, 0), edge + 3):
+            text = "k:\n" + " " * spaces + "v\n"
+            before = len(exact_calls)
+            assert within(text, limit) is (exact(text) <= limit), (text, limit)
+            assert (len(exact_calls) == before) is (spaces <= edge), (text, limit)
+
+
+def test_typical_frontmatter_never_needs_the_exact_bound(monkeypatch: pytest.MonkeyPatch):
+    def unreachable(text: str) -> int:
+        raise AssertionError(f"the exact bound ran on {text!r}")
+
+    monkeypatch.setattr(yaml_util, "_nesting_bound", unreachable)
+    for text in [*ORDINARY, "k: [a]\n" * 30]:
+        assert yaml_util._nests_within(text, yaml_util._C_SCAN_DEPTH)  # pyright: ignore[reportPrivateUsage]
+
+
 @requires_c
 @pytest.mark.parametrize("shape", ["flow", "flowmap", "dash", "question"])
 def test_texts_that_may_nest_past_the_scan_bound_skip_the_c_parser(
@@ -1125,12 +1201,102 @@ def test_no_libyaml_version_without_the_extension(monkeypatch: pytest.MonkeyPatc
     assert yaml_util._installed_libyaml_version() is None  # pyright: ignore[reportPrivateUsage]
 
 
+CLIBZ_MODULES = ["_ruamel_yaml_clibz", "ruamel.yaml.clibz._ruamel_yaml_clibz"]
+"""The names `ruamel.yaml.clibz` builds its parser under: the same libyaml 0.1.7 sources,
+compiled with Zig and a free-threading flag, which the guards were never searched against."""
+
+
+def _c_module(name: str, parser: type) -> types.ModuleType:
+    """A module `name` holding `parser` as its `CParser` and reporting libyaml
+    `CHECKED_LIBYAML_VERSION`, as both clib and clibz do."""
+    module = types.ModuleType(name)
+    module.CParser = parser  # pyright: ignore[reportAttributeAccessIssue]
+    module.get_version_string = lambda: CHECKED_LIBYAML_VERSION  # pyright: ignore[reportAttributeAccessIssue]
+    return module
+
+
+def _use_c_parser_from(
+    monkeypatch: pytest.MonkeyPatch, name: str, registered: type | None = None
+) -> None:
+    """Make a class defined in module `name` ruamel's C parser, as a ruamel release whose
+    `YAML()` imported it would, and register that module holding `registered` (by default
+    the parser itself)."""
+    parser = type("CParser", (), {"__module__": name})
+    monkeypatch.setitem(sys.modules, name, _c_module(name, registered or parser))
+    monkeypatch.setattr(yaml_util, "_CParser", parser)
+    monkeypatch.delenv(PURE_ENV, raising=False)
+
+
+@pytest.mark.parametrize(
+    ("name", "clib"),
+    [(name, True) for name in yaml_util.CHECKED_C_PARSER_MODULES]
+    + [(name, False) for name in CLIBZ_MODULES],
+)
+def test_only_clibs_parser_counts_as_the_checked_build(
+    name: str, clib: bool, monkeypatch: pytest.MonkeyPatch
+):
+    """A parser from clibz reports the same libyaml version as clib's, so only its module
+    tells it apart; it must leave the readers pure. clib's two module names, faked the same
+    way, show that the version alone would have let it through."""
+    _use_c_parser_from(monkeypatch, name)
+    ruamel_checked = yaml_util._ruamel_is_checked()  # pyright: ignore[reportPrivateUsage]
+    expected_version = CHECKED_LIBYAML_VERSION if clib else None
+    assert yaml_util._installed_libyaml_version() == expected_version  # pyright: ignore[reportPrivateUsage]
+    checked = yaml_util._c_parser_is_checked()  # pyright: ignore[reportPrivateUsage]
+    assert checked is (clib and ruamel_checked)
+    monkeypatch.setattr(yaml_util, "_C_PARSER_CHECKED", checked)
+    assert yaml_parser_mode() == ("c-first" if clib and ruamel_checked else "pure")
+
+
+@pytest.mark.parametrize("name", yaml_util.CHECKED_C_PARSER_MODULES)
+def test_a_clib_name_counts_only_for_the_parser_its_module_holds(
+    name: str, monkeypatch: pytest.MonkeyPatch
+):
+    """The version is read from the module that defines the parser, never from a module
+    that carries clib's name, or the `_ruamel_yaml` fallback, but holds another parser."""
+    other = type("CParser", (), {"__module__": name})
+    monkeypatch.setitem(sys.modules, "_ruamel_yaml", _c_module("_ruamel_yaml", other))
+    _use_c_parser_from(monkeypatch, name, registered=other)
+    assert yaml_util._installed_libyaml_version() is None  # pyright: ignore[reportPrivateUsage]
+    assert not yaml_util._c_parser_is_checked()  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize("name", ["_ruamel_yaml", *CLIBZ_MODULES])
+def test_a_yaml_that_used_clibzs_parser_would_leave_the_readers_pure(name: str):
+    """The case behind the module check, end to end: a later ruamel release whose `YAML()`
+    imported clibz's parser. The process patches `ruamel.yaml.main.CParser` before importing
+    this package, so the gate decides at import as it would there. clib's name, faked the
+    same way, is the control: it reads C-first."""
+    code = (
+        "import sys, types\n"
+        "import ruamel.yaml.main\n"
+        f"name = {name!r}\n"
+        "parser = type('CParser', (), {'__module__': name})\n"
+        "module = types.ModuleType(name)\n"
+        "module.CParser = parser\n"
+        "module.get_version_string = lambda: '0.1.7'\n"
+        "sys.modules[name] = module\n"
+        "ruamel.yaml.main.CParser = parser\n"
+        "from frontmatter_format import yaml_util\n"
+        "print(yaml_util.yaml_parser_mode(), yaml_util._C_PARSER_CHECKED)\n"
+    )
+    env = {key: value for key, value in os.environ.items() if key != PURE_ENV}
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env
+    )
+    clib = name == "_ruamel_yaml" and yaml_util._ruamel_is_checked()  # pyright: ignore[reportPrivateUsage]
+    assert out.stdout.split() == (["c-first", "True"] if clib else ["pure", "False"])
+
+
 @requires_c
 @pytest.mark.usefixtures("pure_switch")
 def test_the_installed_extension_is_the_checked_build():
     """CI installs the extension; a clib release with another libyaml must fail here, so that
     the search behind the guards is rerun before the gate is widened."""
+    assert C_PARSER.__module__ in yaml_util.CHECKED_C_PARSER_MODULES
+    assert getattr(yaml_util._clib_module(), "CParser", None) is C_PARSER  # pyright: ignore[reportPrivateUsage]
     assert yaml_util._installed_libyaml_version() == CHECKED_LIBYAML_VERSION  # pyright: ignore[reportPrivateUsage]
+    assert yaml_util._c_parser_is_checked()  # pyright: ignore[reportPrivateUsage]
     assert yaml_util._C_PARSER_CHECKED  # pyright: ignore[reportPrivateUsage]
     assert yaml_parser_mode() == "c-first"
 
