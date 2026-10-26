@@ -288,9 +288,9 @@ Reading is C-first: when ruamel’s optional C extension, `ruamel.yaml.clib`, is
 and passes this library’s version check, the readers (`fmf_read`,
 `fmf_read_frontmatter`, `from_yaml_string` and `read_yaml_file`) parse with libyaml;
 otherwise they use pure-Python ruamel.
-The results match pure ruamel’s either way: a text with a shape libyaml was found to
-read differently goes straight to pure ruamel, and a text libyaml fails on is read again
-by pure ruamel (see
+The results are meant to be pure ruamel’s either way: a text with a shape libyaml was
+found to read differently goes straight to pure ruamel, and a text libyaml fails on is
+read again by pure ruamel (see
 [How C-First Reading Stays Exact](#how-c-first-reading-stays-exact)).
 
 Measured with ruamel.yaml 0.19.1 and `ruamel.yaml.clib` 0.2.15 on CPython 3.10 to 3.14,
