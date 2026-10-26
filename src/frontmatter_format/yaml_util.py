@@ -293,19 +293,24 @@ bound costs speed only on a document with more than 150 flow collections in all,
 indented 75 columns.
 """
 
-_FLOW_OPEN = re.compile(r"(?<![^ \t\r\n\[{,:?])[\[{]")
+_FLOW_OPEN = re.compile(r"[\[{](?<![^ \t\r\n\[{,:?][\[{])")
 """A `[` or `{` where libyaml can open a flow collection: at the start of the text or
 after whitespace, another flow indicator, a colon or a `?`.
 
 Anywhere else, such as inside a plain scalar (`a[b`) or right after a quote, a tag, an
 anchor or a closing bracket, libyaml either reads it as content or rejects the text, so
 the count is an upper bound on the flow nesting depth.
+
+This regex and the two below start with a literal character, as the guards in
+`_libyaml_guard` do, so the engine can skip to the next candidate instead of trying a
+lookbehind or a group at every position. Each matches exactly what its earlier
+lookbehind-first form matched; `tests/test_c_parser.py` compares the two.
 """
 
-_INDICATOR_CHAIN = re.compile(r"(?:[-?] +)+")
+_INDICATOR_CHAIN = re.compile(r"[-?] +(?:[-?] +)*")
 """A run of `- ` and `? ` indicators on one line, each of which opens a block collection."""
 
-_LINE_INDENT = re.compile(r"(?<![^\r\n]) +")
+_LINE_INDENT = re.compile(r" (?<![^\r\n] ) *")
 """The spaces that indent a line."""
 
 
@@ -394,10 +399,26 @@ def _c_eligible(text: Any) -> bool:
     predicate, shared with the differential search in `devtools/yaml_parser_fuzz.py`.
     """
     return (
-        isinstance(text, str)
-        and not needs_pure_parser(text)
-        and _nesting_bound(text) <= _C_SCAN_DEPTH
+        isinstance(text, str) and not needs_pure_parser(text) and _nests_within(text, _C_SCAN_DEPTH)
     )
+
+
+def _nests_within(text: str, limit: int) -> bool:
+    """
+    Whether `_nesting_bound(text) <= limit`, deciding most texts from character counts.
+
+    `rough` counts every `[`, `{`, `-` and `?` plus the bound's constant 2, so it is at
+    least the flow and chain terms plus 2, which count some of those characters. If
+    `spare = limit - rough` is not negative and no run of `spare // 2 + 1` spaces occurs,
+    no indent is longer than `spare // 2`, so the indent term (twice the indent) is at most
+    `spare` and the bound at most `limit`. Otherwise the exact bound decides, so the answer
+    is always the exact one.
+    """
+    rough = text.count("[") + text.count("{") + text.count("-") + text.count("?") + 2
+    spare = limit - rough
+    if spare >= 0 and " " * (spare // 2 + 1) not in text:
+        return True
+    return _nesting_bound(text) <= limit
 
 
 _C_FAILED: Any = object()
