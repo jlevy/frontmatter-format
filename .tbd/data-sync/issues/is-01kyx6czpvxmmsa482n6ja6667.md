@@ -5,15 +5,15 @@ title: Integrate alias-free frontmatter output and portability guidance
 kind: task
 status: closed
 priority: 2
-version: 4
-spec_path: docs/project/specs/active/plan-2026-07-31-deterministic-yaml-output.md
+version: 6
+spec_path: docs/project/specs/done/plan-2026-07-31-deterministic-yaml-output.md
 labels: []
 dependencies:
   - type: blocks
     target: is-01kyx6d7qxmrbg114tpg29mdgt
 parent_id: is-01kyx6cjm1tg2b1rs0416a0y8v
 created_at: 2026-07-31T22:58:27.162Z
-updated_at: 2026-07-31T23:14:38.394Z
+updated_at: 2026-10-26T03:42:47.523Z
 closed_at: 2026-07-31T23:14:38.393Z
 close_reason: Added frontmatter integration coverage and documented alias, cycle, and timestamp portability behavior.
 ---

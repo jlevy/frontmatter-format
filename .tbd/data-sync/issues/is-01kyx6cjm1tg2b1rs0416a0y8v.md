@@ -5,8 +5,8 @@ title: "Spec: Deterministic, alias-free YAML output"
 kind: epic
 status: closed
 priority: 1
-version: 6
-spec_path: docs/project/specs/active/plan-2026-07-31-deterministic-yaml-output.md
+version: 7
+spec_path: docs/project/specs/done/plan-2026-07-31-deterministic-yaml-output.md
 labels: []
 dependencies: []
 child_order_hints:
@@ -14,7 +14,7 @@ child_order_hints:
   - is-01kyx6czpvxmmsa482n6ja6667
   - is-01kyx6d7qxmrbg114tpg29mdgt
 created_at: 2026-07-31T22:58:13.760Z
-updated_at: 2026-07-31T23:51:53.750Z
+updated_at: 2026-10-26T03:42:46.472Z
 closed_at: 2026-07-31T23:51:53.750Z
 close_reason: "PR #6 independently reviewed at 843351f: no open findings; full lint/type/test/build gates and custom cycle/atomicity/API probes pass; GitHub CI is green; PR #5 is closed as superseded."
 ---
