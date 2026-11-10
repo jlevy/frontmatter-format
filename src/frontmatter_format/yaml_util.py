@@ -593,7 +593,7 @@ def read_yaml_file(path: str | Path) -> Any:
     Read YAML file into a Python object, as `new_yaml().load()` reads its text.
     """
     path = Path(path)
-    return _load_yaml_text(path.read_text(encoding="utf-8"))
+    return _load_yaml_text(path.read_text(encoding="utf-8-sig"))
 
 
 def to_yaml_string(

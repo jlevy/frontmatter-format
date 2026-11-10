@@ -939,3 +939,14 @@ def test_fmf_read_raw_raises_on_unclosed_delimiter(tmp_path: Path):
 
     with pytest.raises(FmFormatError, match="end of frontmatter not found"):
         fmf_read_raw(file_path)
+
+
+def test_fmf_bom_file_reads_frontmatter(tmp_path: Path):
+    file_path = tmp_path / "bom.md"
+    file_path.write_bytes("---\ntitle: Hi\n---\nbody\n".encode("utf-8-sig"))
+
+    assert fmf_has_frontmatter(file_path) is True
+    content, metadata = fmf_read(file_path)
+    assert metadata == {"title": "Hi"}
+    assert content == "body\n"
+    assert not content.startswith("\ufeff")
