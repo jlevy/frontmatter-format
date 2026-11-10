@@ -163,7 +163,7 @@ def fmf_read_raw(path: Path | str) -> tuple[str, str | None]:
     """
     Reads the full content and raw (unparsed) metadata from the file, both as strings.
     """
-    with open(path, encoding="utf-8") as stream:
+    with open(path, encoding="utf-8-sig") as stream:
         metadata_str, content_offset, _ = _read_frontmatter_file_stream(stream, path)
         # A file that is not UTF-8 reads as having no frontmatter, at offset 0, so this
         # read raises its decode error.
@@ -280,7 +280,7 @@ def fmf_read_frontmatter_raw(path: Path | str) -> tuple[str | None, int, int]:
     Does not parse the metadata or read the body content.
     Returns None, 0, 0 if there is no frontmatter. Safe on binary files.
     """
-    with open(path, encoding="utf-8") as stream:
+    with open(path, encoding="utf-8-sig") as stream:
         return _read_frontmatter_file_stream(stream, path)
 
 
@@ -321,7 +321,7 @@ def fmf_has_frontmatter(path: Path | str) -> bool:
     raises `FmFormatError`. Frontmatter that holds no metadata, such as an empty block,
     is still frontmatter.
     """
-    with open(path, encoding="utf-8") as stream:
+    with open(path, encoding="utf-8-sig") as stream:
         return _read_frontmatter_file_stream(stream, path, strict=False)[0] is not None
 
 
@@ -334,7 +334,7 @@ def _rewrite_frontmatter(
     style of the new frontmatter, if there is any.
     """
     with atomic_write_text(path, label) as temp_file:
-        with open(path, encoding="utf-8") as original_file:
+        with open(path, encoding="utf-8-sig") as original_file:
             # Offsets from this stream, so they match the text copied from it.
             _, content_offset, metadata_start_offset = _read_frontmatter_file_stream(
                 original_file, path
